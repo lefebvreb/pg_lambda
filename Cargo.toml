@@ -1,0 +1,18 @@
+[workspace]
+members = ["myorm_macros"]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+
+[package]
+name = "myorm"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+serde = { version = "1.0.217", default-features = false, features = ["derive", "std"] }
+tokio-postgres = { version = "0.7.13", default-features = false }
+
+[dependencies.myorm_macros]
+path = "myorm_macros"
