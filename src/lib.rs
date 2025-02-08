@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use tokio_postgres::types::Type;
 
 // mod driver;
+mod types;
 
 // macro_rules! plpgsql {
 //     {
@@ -58,12 +59,30 @@ impl Display for Column {
     }
 }
 
+// #[derive(Clone, Serialize, Deserialize)]
+// #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
+// pub enum MatchKind {
+//     Full,
+//     Partial,
+//     Simple,
+// }
+
 #[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
-pub enum MatchKind {
-    Full,
-    Partial,
-    Simple,
+pub struct ColumnTuple {
+    pub columns: Cow<'static, [ColumnName]>,
+}
+
+impl Display for ColumnTuple {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        write!(f, "(")?;
+        if let Some((last, head)) = self.columns.split_last() {
+            for column in head {
+                write!(f, "{column},")?;
+            }
+            write!(f, "{last}")?;
+        }
+        write!(f, ")")
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -72,8 +91,8 @@ pub enum ReferentialAction {
     NoAction,
     Restrict,
     Cascade,
-    SetNull { columns: Cow<'static, [ColumnName]> },
-    SetDefault { columns: Cow<'static, [ColumnName]> },
+    SetNull { columns: ColumnTuple },
+    SetDefault { columns: ColumnTuple },
 }
 
 // ALTER TABLE name ADD
@@ -86,32 +105,46 @@ pub enum ReferentialAction {
 //       [ MATCH FULL | MATCH PARTIAL | MATCH SIMPLE ] [ ON DELETE referential_action ] [ ON UPDATE referential_action ] }
 //   [ DEFERRABLE | NOT DEFERRABLE ] [ INITIALLY DEFERRED | INITIALLY IMMEDIATE ]
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub enum Constraint {
     Check {
-        constraint_name: Cow<'static, str>,
         expr: Cow<'static, str>,
     },
     Unique {
-        columns: Cow<'static, [ColumnName]>,
+        columns: ColumnTuple,
         nulls_not_distinct: bool,
     },
     PrimaryKey {
-        columns: Cow<'static, [ColumnName]>,
+        columns: ColumnTuple,
     },
     ForeignKey {
-        columns: Cow<'static, [ColumnName]>,
+        columns: ColumnTuple,
         table: TableName,
-        references: Cow<'static, [ColumnName]>,
-        match_kind: MatchKind,
+        references: ColumnTuple,
         on_delete: ReferentialAction,
-        on_update: ReferentialAction,
     },
 }
 
 impl Constraint {
     pub fn name(&self) -> String {
         todo!()
+    }
+}
+
+impl Display for Constraint {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        match self {
+            Self::Check { expr } => write!(f, "CHECK {expr}"),
+            Self::Unique { columns, nulls_not_distinct } => {
+                write!(f, "UNIQUE ")?;
+                if *nulls_not_distinct {
+                    write!(f, "NULLS NOT DISTINCT ")?;
+                }
+                write!(f, "{columns}")
+            },
+            Self::PrimaryKey { columns } => todo!(),
+            Self::ForeignKey { columns, table, references, on_delete } => todo!(),
+        }
     }
 }
 
@@ -132,9 +165,10 @@ enum SchemaOp {
     },
     AddConstraint {
         table: TableName,
-        column: ColumnName,
+        constraint: Constraint,
     },
     DropConstraint {
+        table: TableName,
         constraint: &'static str,
     },
 }
@@ -143,21 +177,17 @@ impl SchemaOp {
     pub fn is_destructive(&self) -> bool {
         matches!(self, Self::DropTable { .. } | Self::DropColumn { .. })
     }
+}
 
-    pub fn to_query(&self) -> String {
+impl Display for SchemaOp {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
-            SchemaOp::CreateTable { table } => format!("CREATE TABLE {table};"),
-            SchemaOp::DropTable { table } => format!("DROP TABLE {table};"),
-            SchemaOp::AddColumn { table, column } => {
-                format!("ALTER TABLE {table} ADD COLUMN {column};")
-            }
-            SchemaOp::DropColumn { table, column } => {
-                format!("ALTER TABLE {table} DROP COLUMN {column};")
-            }
-            SchemaOp::AddConstraint { table, column } => todo!(),
-            SchemaOp::DropConstraint {
-                constraint: constraint_name,
-            } => todo!(),
+            SchemaOp::CreateTable { table } => write!(f, "CREATE TABLE {table};"),
+            SchemaOp::DropTable { table } => write!(f, "DROP TABLE {table};"),
+            SchemaOp::AddColumn { table, column } => write!(f, "ALTER TABLE {table} ADD COLUMN {column};"),
+            SchemaOp::DropColumn { table, column } => write!(f, "ALTER TABLE {table} DROP COLUMN {column};"),
+            SchemaOp::AddConstraint { table, constraint } => write!(f, "ALTER TABLE {table} ADD CONSTRAINT {} {constraint};", constraint.name()),
+            SchemaOp::DropConstraint { table, constraint } => write!(f, "ALTER TABLE {table} DROP CONSTRAINT {constraint};"),
         }
     }
 }
