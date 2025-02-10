@@ -2,7 +2,7 @@ use proc_macro_crate::FoundCrate;
 use quote::format_ident;
 use syn::{Ident, Result};
 
-const CRATE_NAME: &str = "radycal";
+const CRATE_NAME: &str = "myorm";
 
 pub fn crate_ident() -> Ident {
     match proc_macro_crate::crate_name(CRATE_NAME) {

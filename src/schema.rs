@@ -214,7 +214,7 @@ pub struct TableSchema {
     pub constraints: Cow<'static, [Constraint]>,
 }
 
-inventory::collect!(TableSchema);
+inventory::collect!(&'static TableSchema);
 
 /// Struct that corresponds to a table definition. Do not implement this trait manually.
 pub trait Table {
@@ -224,7 +224,7 @@ pub trait Table {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Schema {
-    pub tables: Cow<'static, TableName>,
+    pub tables: Cow<'static, [TableSchema]>,
 }
 
 impl Schema {

@@ -88,11 +88,11 @@ impl<'a> BackendMessage<'a> for Authentication<'a> {
                 salt: read_slice(4, src)?.try_into().unwrap(),
             },
             7 => Self::Gss,
-            8 => Self::GSSContinue { 
+            8 => Self::GSSContinue {
                 data: src,
             },
             9 => Self::Sspi,
-            10 => Self::Sasl { 
+            10 => Self::Sasl {
                 authentication_mechanisms: read_cstr_list(src)?,
             },
             11 => Self::SaslContinue {

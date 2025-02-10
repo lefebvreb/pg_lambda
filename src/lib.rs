@@ -18,7 +18,9 @@ mod util;
 // }
 
 #[doc(hidden)]
-pub mod __macros {
+pub mod __proc_macro_util {
+    pub use std::borrow::Cow;
+
     pub use inventory::submit;
 
     pub use crate::schema::*;
