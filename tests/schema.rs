@@ -1,5 +1,14 @@
 use myorm::schema::Table;
 
+// Container attributes:
+// <schema> ::= "schema" "=" <ident>
+// <check> ::= "check" "=" "."*
+// <unique> ::= "unique" "=" <ident> ("," <ident>)*
+// <primary_key> ::= "primary_key" "=" <ident> ("," <ident>)*
+// <foreign_key> ::= "foreign_key" "=" "(" <ident> ("," <ident>)* ")" <ident> "(" <ident> ("," <ident>)* ")" ("cascade" | "restrict" | "set_null" "(" <ident> ("," <ident>) ")")?
+
+// Field attribute
+
 #[test]
 fn schema() {
     #[derive(Table)]

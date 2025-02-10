@@ -8,10 +8,26 @@ pub use myorm_macros::Table;
 use crate::util;
 
 #[derive(Clone, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Name(pub Cow<'static, str>);
+
+impl Name {
+    pub const fn new(name: &'static str) -> Self {
+        Self(Cow::Borrowed(name))
+    }
+}
+
+impl Display for Name {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        write!(f, "\"{}\"", self.0)
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TableName {
-    pub schema: Option<Cow<'static, str>>,
-    pub name: Cow<'static, str>,
+    pub schema: Option<Name>,
+    pub name: Name,
 }
 
 impl Display for TableName {
@@ -25,18 +41,8 @@ impl Display for TableName {
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ColumnName(pub Cow<'static, str>);
-
-impl Display for ColumnName {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        write!(f, "\"{}\"", self.0)
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct Column {
-    pub name: ColumnName,
+    pub name: Name,
     // this will change to an enum, god willing
     pub ty: Cow<'static, str>,
 }
@@ -56,7 +62,8 @@ impl Display for Column {
 // }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub struct ColumnTuple(Cow<'static, [ColumnName]>);
+#[serde(transparent)]
+pub struct ColumnTuple(Cow<'static, [Name]>);
 
 impl Display for ColumnTuple {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
@@ -104,16 +111,6 @@ impl Display for ReferentialAction {
 //   [ DEFERRABLE | NOT DEFERRABLE ] [ INITIALLY DEFERRED | INITIALLY IMMEDIATE ]
 
 #[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ConstraintName(Cow<'static, str>);
-
-impl Display for ConstraintName {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        write!(f, "\"{}\"", self.0)
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Constraint {
     Check {
@@ -129,17 +126,20 @@ pub enum Constraint {
     ForeignKey {
         columns: ColumnTuple,
         table: TableName,
-        references: ColumnTuple,
+        foreign_columns: ColumnTuple,
         on_delete: ReferentialAction,
         migrate_expr: Option<Cow<'static, str>>,
     },
 }
 
 impl Constraint {
-    pub fn name(&self) -> ConstraintName {
+    pub fn name(&self) -> Name {
         // yeah...
         let json = serde_json::to_string(self).unwrap();
-        ConstraintName(Cow::Owned(format!("constraint_{}", util::sha1(json.as_bytes()))))
+        Name(Cow::Owned(format!(
+            "constraint_{}",
+            util::sha1(json.as_bytes())
+        )))
     }
 }
 
@@ -147,15 +147,27 @@ impl Display for Constraint {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
             Self::Check { expr } => write!(f, "CHECK {expr}"),
-            Self::Unique { columns, nulls_not_distinct } => {
+            Self::Unique {
+                columns,
+                nulls_not_distinct,
+            } => {
                 write!(f, "UNIQUE ")?;
                 if *nulls_not_distinct {
                     write!(f, "NULLS NOT DISTINCT ")?;
                 }
                 write!(f, "{columns}")
-            },
+            }
             Self::PrimaryKey { columns } => write!(f, "PRIMARY KEY {columns}"),
-            Self::ForeignKey { columns, table, references, on_delete, .. } => write!(f, "FOREIGN KEY {columns} REFERENCES {table} {references} ON DELETE {on_delete}"),
+            Self::ForeignKey {
+                columns,
+                table,
+                foreign_columns: references,
+                on_delete,
+                ..
+            } => write!(
+                f,
+                "FOREIGN KEY {columns} REFERENCES {table} {references} ON DELETE {on_delete}"
+            ),
         }
     }
 }
@@ -175,7 +187,7 @@ pub enum SchemaOp {
     },
     DropColumn {
         table: TableName,
-        column: ColumnName,
+        column: Name,
     },
     AddConstraint {
         table: TableName,
@@ -198,10 +210,24 @@ impl Display for SchemaOp {
         match self {
             Self::CreateTable { table } => write!(f, "CREATE TABLE {table};"),
             Self::DropTable { table } => write!(f, "DROP TABLE {table};"),
-            Self::AddColumn { table, column } => write!(f, "ALTER TABLE {table} ADD COLUMN {column};"),
-            Self::DropColumn { table, column } => write!(f, "ALTER TABLE {table} DROP COLUMN {column};"),
-            Self::AddConstraint { table, constraint } => write!(f, "ALTER TABLE {table} ADD CONSTRAINT {} {constraint};", constraint.name()),
-            Self::DropConstraint { table, constraint_name } => write!(f, "ALTER TABLE {table} DROP CONSTRAINT \"{constraint_name}\";"),
+            Self::AddColumn { table, column } => {
+                write!(f, "ALTER TABLE {table} ADD COLUMN {column};")
+            }
+            Self::DropColumn { table, column } => {
+                write!(f, "ALTER TABLE {table} DROP COLUMN {column};")
+            }
+            Self::AddConstraint { table, constraint } => write!(
+                f,
+                "ALTER TABLE {table} ADD CONSTRAINT {} {constraint};",
+                constraint.name()
+            ),
+            Self::DropConstraint {
+                table,
+                constraint_name,
+            } => write!(
+                f,
+                "ALTER TABLE {table} DROP CONSTRAINT \"{constraint_name}\";"
+            ),
         }
     }
 }

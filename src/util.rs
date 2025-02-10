@@ -1,4 +1,4 @@
-use sha1::{Sha1, Digest};
+use sha1::{Digest, Sha1};
 
 pub fn sha1(input: &[u8]) -> u128 {
     let mut hasher = Sha1::new();
