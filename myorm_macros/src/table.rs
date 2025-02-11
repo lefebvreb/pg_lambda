@@ -1,9 +1,11 @@
+use std::collections::HashMap;
+
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
-use syn::{Attribute, Expr, Ident, ItemStruct, Lit, LitStr, Meta, Result, Token};
+use syn::{Attribute, Expr, Fields, Ident, ItemStruct, Lit, LitStr, Meta, Result, Token};
 
 use crate::util::{self, bail, ensure_let};
 
@@ -65,7 +67,7 @@ enum ReferentialAction {
     SetDefault { columns: Vec<String> },
 }
 
-struct ForeignKeyConstraint {
+struct Reference {
     table: Ident,
     foreign_columns: Vec<String>,
     on_delete: ReferentialAction,
@@ -87,7 +89,7 @@ enum ContainerAttribute {
     },
     ForeignKey {
         columns: Vec<String>,
-        references: ForeignKeyConstraint,
+        references: Reference,
     },
 }
 
@@ -97,21 +99,15 @@ impl ContainerAttribute {
     }
 }
 
-enum ColumnAttribute {
+enum FieldAttribute {
     Unique { nulls_not_distinct: bool },
     PrimaryKey,
-    ForeignKey { references: ForeignKeyConstraint },
+    ForeignKey { references: Reference },
 }
 
-impl ColumnAttribute {
+impl FieldAttribute {
     fn from_metas(Metas(metas): Metas) -> Result<Vec<Self>> {
         Ok(vec![])
-    }
-}
-
-impl Parse for ColumnAttribute {
-    fn parse(input: ParseStream) -> Result<Self> {
-        todo!()
     }
 }
 
@@ -119,16 +115,37 @@ pub fn main(item: ItemStruct) -> Result<TokenStream> {
     let this = util::crate_ident();
     let ident = &item.ident;
 
-    let table = item.ident.to_string();
+    // Schema data.
+    let name = item.ident.to_string();
     let mut schema = None::<String>;
+    let mut columns = HashMap::new();
     let mut primary_key = None::<Vec<String>>;
     let mut constraints = Vec::<TokenStream>::default();
 
-    for attr in item.attrs {
-        if is_attr_ours(&attr) {
+    ensure_let!(Fields::Named(fields) = &item.fields, item.fields.span(), "expected a struct with named fields");
+
+    for field in &fields.named {
+        let ty = &field.ty;
+        columns.insert(
+            field.ident.as_ref().unwrap().to_string(), 
+            quote!(<#ty as /* TODO */>::SQL_NAME),
+        );
+    }
+
+    for attr in &item.attrs {
+        if is_attr_ours(attr) {
             for attr in attr
                 .parse_args::<Metas>()
                 .and_then(ContainerAttribute::from_metas)?
+            {}
+        }
+    }
+
+    for attr in fields.named.iter().flat_map(|field| field.attrs.iter()) {
+        if is_attr_ours(attr) {
+            for attr in attr
+                .parse_args::<Metas>()
+                .and_then(FieldAttribute::from_metas)?
             {}
         }
     }
@@ -141,13 +158,13 @@ pub fn main(item: ItemStruct) -> Result<TokenStream> {
                 const SCHEMA: TableSchema = TableSchema {
                     name: TableName {
                         schema: None,
-                        name: Name::new(#table),
+                        name: Name::new(#name),
                     },
                     columns: Cow::Borrowed(&[]),
                     constraints: Cow::Borrowed(&[]),
                 };
             }
-
+            
             submit!(&#ident::SCHEMA);
         };
     })
