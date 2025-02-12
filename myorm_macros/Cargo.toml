@@ -7,6 +7,8 @@ edition.workspace = true
 proc-macro = true
 
 [dependencies]
+pest = { version = "2.7.15", default-features = false, features = ["std"] }
+pest_derive = { version = "2.7.15", default-features = false, features = ["std"] }
 proc-macro-crate = { version = "3.2.0", default-features = false }
 proc-macro2 = { version = "1.0.93", default-features = false }
 quote = { version = "1.0.38", default-features = false }

@@ -1,0 +1,21 @@
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+
+Ident = @{ (("_"+ ~ ASCII_ALPHANUMERIC) | ASCII_ALPHA) ~ (ASCII_ALPHANUMERIC | "_")* }
+IdentTuple = { "(" ~ Ident ~ ("," ~ Ident)* ~ ","? ~ ")" }
+
+NoAction = { "no_action" }
+Restrict = { "restrict" }
+Cascade = { "cascade" }
+SetNull = { "set_null" ~ IdentTuple }
+SetDefault = { "set_default" ~ IdentTuple }
+ReferentialAction = { NoAction | Restrict | Cascade | SetNull | SetDefault }
+
+NullsNotDistinct = { "nulls_not_distinct" }
+
+TableSchema = _{ Ident }
+TablePrimaryKey = _{ IdentTuple }
+TableForeignKey = _{ IdentTuple ~ Ident ~ IdentTuple ~ ReferentialAction? }
+TableUnique = _{ IdentTuple ~ NullsNotDistinct? }
+
+ColumnForeignKey = _{ Ident ~ "(" ~ Ident ~ ")" ~ ReferentialAction? }
+ColumnUnique = _{ NullsNotDistinct? }

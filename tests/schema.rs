@@ -30,7 +30,7 @@ fn schema() {
     }
 
     #[derive(Table)]
-    #[table(primary_key = "team_id, user_id")]
+    #[table(primary_key = "(team_id, user_id)")]
     pub struct TeamUser {
         #[table(foreign_key = "Team (id)")]
         pub team_id: i64,

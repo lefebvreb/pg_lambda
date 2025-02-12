@@ -43,7 +43,6 @@ impl Display for TableName {
 #[serde(rename_all = "camelCase")]
 pub struct Column {
     pub name: Name,
-    // this will change to an enum, god willing
     pub ty: Cow<'static, str>,
 }
 
@@ -52,14 +51,6 @@ impl Display for Column {
         write!(f, "{} {}", self.name, self.ty)
     }
 }
-
-// #[derive(Clone, Serialize, Deserialize)]
-// #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
-// pub enum MatchKind {
-//     Full,
-//     Partial,
-//     Simple,
-// }
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -126,9 +117,8 @@ pub enum Constraint {
     ForeignKey {
         columns: ColumnTuple,
         table: TableName,
-        foreign_columns: ColumnTuple,
+        ref_columns: ColumnTuple,
         on_delete: ReferentialAction,
-        migrate_expr: Option<Cow<'static, str>>,
     },
 }
 
@@ -161,7 +151,7 @@ impl Display for Constraint {
             Self::ForeignKey {
                 columns,
                 table,
-                foreign_columns: references,
+                ref_columns: references,
                 on_delete,
                 ..
             } => write!(
@@ -254,7 +244,7 @@ pub struct Schema {
 }
 
 impl Schema {
-    pub fn diff(&self, other: &Self) -> Box<[SchemaOp]> {
+    fn diff(&self, other: &Self) -> Box<[SchemaOp]> {
         todo!()
     }
 }
