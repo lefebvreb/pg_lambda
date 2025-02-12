@@ -1,4 +1,4 @@
-use pg_lambda::schema::Table;
+use pg_lambda::schema::{Schema, Table};
 
 // Container attributes:
 // <schema> ::= "schema" "=" <ident>
@@ -44,4 +44,7 @@ pub struct Permission {
 }
 
 #[test]
-fn schema() {}
+fn schema() {
+    let s = serde_json::to_string_pretty(Schema::get()).unwrap();
+    std::fs::write(".vscode/schema.json", s).unwrap();
+}
