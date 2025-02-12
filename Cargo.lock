@@ -269,6 +269,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "lazy_static"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
+
+[[package]]
 name = "libc"
 version = "0.2.169"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -313,30 +319,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8402cab7aefae129c6977bb0ff1b8fd9a04eb5b51efc50a70bea51cda0c7924"
 dependencies = [
  "adler2",
-]
-
-[[package]]
-name = "myorm"
-version = "0.1.0"
-dependencies = [
- "inventory",
- "myorm_macros",
- "serde",
- "serde_json",
- "sha1",
- "tokio-postgres",
-]
-
-[[package]]
-name = "myorm_macros"
-version = "0.1.0"
-dependencies = [
- "pest",
- "pest_derive",
- "proc-macro-crate",
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]
@@ -426,6 +408,31 @@ dependencies = [
  "once_cell",
  "pest",
  "sha2",
+]
+
+[[package]]
+name = "pg_lambda"
+version = "0.1.0"
+dependencies = [
+ "inventory",
+ "lazy_static",
+ "pg_lambda_macros",
+ "serde",
+ "serde_json",
+ "sha1",
+ "tokio-postgres",
+]
+
+[[package]]
+name = "pg_lambda_macros"
+version = "0.1.0"
+dependencies = [
+ "pest",
+ "pest_derive",
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

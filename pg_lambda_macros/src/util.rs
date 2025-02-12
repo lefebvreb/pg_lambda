@@ -1,8 +1,10 @@
+use proc_macro::TokenStream;
 use proc_macro_crate::FoundCrate;
+use proc_macro2::TokenStream as TokenStream2;
 use quote::format_ident;
 use syn::{Ident, Result};
 
-const CRATE_NAME: &str = "myorm";
+const CRATE_NAME: &str = "pg_lambda";
 
 pub fn crate_ident() -> Ident {
     match proc_macro_crate::crate_name(CRATE_NAME) {
@@ -11,7 +13,7 @@ pub fn crate_ident() -> Ident {
     }
 }
 
-pub fn syn_try(f: impl FnOnce() -> Result<proc_macro2::TokenStream>) -> proc_macro::TokenStream {
+pub fn syn_try(f: impl FnOnce() -> Result<TokenStream2>) -> TokenStream {
     f().unwrap_or_else(|err| err.to_compile_error()).into()
 }
 

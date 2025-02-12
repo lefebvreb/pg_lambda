@@ -1,9 +1,10 @@
 use std::borrow::Cow;
 use std::fmt::{Display, Formatter, Result as FmtResult};
 
+use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 
-pub use myorm_macros::Table;
+pub use pg_lambda_macros::Table;
 
 use crate::util;
 
@@ -240,10 +241,23 @@ pub trait Table {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Schema {
-    pub tables: Cow<'static, [TableSchema]>,
+    pub tables: Box<[Cow<'static, TableSchema>]>,
+}
+
+lazy_static! {
+    static ref SCHEMA: Schema = Schema {
+        tables: inventory::iter::<&'static TableSchema>
+            .into_iter()
+            .map(|&table| Cow::Borrowed(table))
+            .collect(),
+    };
 }
 
 impl Schema {
+    pub fn get() -> &'static Self {
+        &SCHEMA
+    }
+
     fn diff(&self, other: &Self) -> Box<[SchemaOp]> {
         todo!()
     }

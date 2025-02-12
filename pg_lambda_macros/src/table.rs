@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use pest::Parser;
 use pest::iterators::Pair;
 use pest_derive::Parser;
-use proc_macro2::TokenStream;
+use proc_macro::TokenStream;
+use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
@@ -194,7 +195,8 @@ impl FieldAttribute {
     }
 }
 
-pub fn main(item: ItemStruct) -> Result<TokenStream> {
+pub fn main(input: TokenStream) -> Result<TokenStream2> {
+    let item = syn::parse::<ItemStruct>(input)?;
     let this = util::crate_ident();
     let ident = &item.ident;
 
@@ -203,7 +205,7 @@ pub fn main(item: ItemStruct) -> Result<TokenStream> {
     let mut schema = None::<String>;
     let mut columns = HashMap::new();
     let mut primary_key = None::<Vec<String>>;
-    let mut constraints = Vec::<TokenStream>::default();
+    let mut constraints = Vec::<TokenStream2>::default();
 
     ensure_let!(
         Fields::Named(fields) = &item.fields,

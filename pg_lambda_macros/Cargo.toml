@@ -1,5 +1,5 @@
 [package]
-name = "myorm_macros"
+name = "pg_lambda_macros"
 version = "0.1.0"
 edition.workspace = true
 
