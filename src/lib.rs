@@ -12,4 +12,8 @@ pub mod __proc_macro_util {
     pub use inventory::submit;
 
     pub use crate::schema::*;
+
+    pub const fn cow_slice<T: Clone>(slice: &'static [T]) -> Cow<'static, [T]> {
+        Cow::Borrowed(slice)
+    }
 }

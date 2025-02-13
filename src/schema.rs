@@ -55,7 +55,7 @@ impl Display for Column {
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct ColumnTuple(Cow<'static, [Name]>);
+pub struct ColumnTuple(pub Cow<'static, [Name]>);
 
 impl Display for ColumnTuple {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
