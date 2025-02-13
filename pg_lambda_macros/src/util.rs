@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
-use proc_macro_crate::FoundCrate;
 use proc_macro2::TokenStream as TokenStream2;
+use proc_macro_crate::FoundCrate;
 use quote::format_ident;
 use syn::{Ident, Result};
 

@@ -4,7 +4,7 @@ use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::token::{Brace, Paren};
-use syn::{Ident, Result, ReturnType, Token, Type, Visibility, braced, parenthesized};
+use syn::{braced, parenthesized, Ident, Result, ReturnType, Token, Type, Visibility};
 
 use crate::util::ensure_let;
 
@@ -50,7 +50,7 @@ impl Parse for Block {
     }
 }
 
-pub struct PgLambdaItem {
+pub struct ItemPgLambda {
     pub vis: Visibility,
     pub fn_token: Token![fn],
     pub ident: Ident,
@@ -60,7 +60,7 @@ pub struct PgLambdaItem {
     pub block: Block,
 }
 
-impl Parse for PgLambdaItem {
+impl Parse for ItemPgLambda {
     fn parse(input: ParseStream) -> Result<Self> {
         let content;
         Ok(Self {
@@ -75,8 +75,21 @@ impl Parse for PgLambdaItem {
     }
 }
 
+pub struct MacroInput {
+    pub items: Vec<ItemPgLambda>,
+}
+
+impl Parse for MacroInput {
+    fn parse(input: ParseStream) -> Result<Self> {
+        let mut items = vec![];
+        while !input.is_empty() {
+            items.push(input.parse()?);
+        }
+        Ok(Self { items })
+    }
+}
+
 pub fn main(input: TokenStream) -> Result<TokenStream2> {
-    let item = syn::parse::<PgLambdaItem>(input)?;
-    dbg!(&item.block.plpgsql);
+    let item = syn::parse::<MacroInput>(input)?;
     Ok(quote!())
 }

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use pest::Parser;
 use pest::iterators::Pair;
+use pest::Parser;
 use pest_derive::Parser;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;

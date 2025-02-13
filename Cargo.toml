@@ -1,9 +1,9 @@
 [workspace]
-members = ["pg_lambda_macros"]
+members = [".", "pg_lambda_macros"]
 resolver = "2"
 
 [workspace.package]
-edition = "2024"
+edition = "2021"
 
 [package]
 name = "pg_lambda"
