@@ -4,7 +4,7 @@ use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::token::{Brace, Paren};
-use syn::{braced, parenthesized, Ident, Result, ReturnType, Token, Type, Visibility};
+use syn::{parenthesized, Ident, Result, ReturnType, Token, Type, Visibility};
 
 use crate::util::ensure_let;
 

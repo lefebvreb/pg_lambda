@@ -1,5 +1,5 @@
 use indexmap::IndexMap;
-use pest::iterators::Pair;
+use pest::iterators::{Pair, Pairs};
 use pest::Parser;
 use pest_derive::Parser;
 use proc_macro::TokenStream;
@@ -16,7 +16,7 @@ use crate::util::{self, bail, ensure, ensure_let};
 #[grammar = "table.pest"]
 struct AttributeValueParser;
 
-fn extract_ident_tuple(pair: Pair<Rule>) -> Vec<String> {
+fn extract_column_tuple(pair: Pair<Rule>) -> Vec<String> {
     pair.into_inner()
         .map(|pair| pair.as_str().to_owned())
         .collect()
@@ -31,10 +31,10 @@ fn extract_referential_action(pair: Option<Pair<Rule>>) -> ReferentialAction {
                 Rule::Restrict => ReferentialAction::Restrict,
                 Rule::Cascade => ReferentialAction::Cascade,
                 Rule::SetNull => ReferentialAction::SetNull {
-                    columns: extract_ident_tuple(pairs.next().unwrap()),
+                    columns: extract_column_tuple(pairs.next().unwrap()),
                 },
                 Rule::SetDefault => ReferentialAction::SetDefault {
-                    columns: extract_ident_tuple(pairs.next().unwrap()),
+                    columns: extract_column_tuple(pairs.next().unwrap()),
                 },
                 _ => unreachable!(),
             }
@@ -43,7 +43,35 @@ fn extract_referential_action(pair: Option<Pair<Rule>>) -> ReferentialAction {
     }
 }
 
-fn is_attr_ours(attr: &Attribute) -> bool {
+fn extract_references(mut pairs: Pairs<Rule>) -> References {
+    let (table, schema) = {
+        let mut pairs = pairs.next().unwrap().into_inner();
+        let one = pairs.next().unwrap().as_str().to_owned();
+        match pairs.next() {
+            Some(two) => (two.as_str().to_owned(), Some(one)),
+            None => (one, None),
+        }
+    };
+
+    References {
+        table,
+        schema,
+        ref_columns: vec![pairs.next().unwrap().as_str().to_owned()],
+        on_delete: extract_referential_action(pairs.next()),
+    }
+}
+
+fn check_ident(ident: &Ident) -> Result<String> {
+    let value = ident.to_string();
+    ensure!(
+        AttributeValueParser::parse(Rule::Ident, &value).is_ok(),
+        ident.span(),
+        "invalid table name, only ascii alphanumeric characters and underscores are allowed: `[_a-zA-Z][_a-zA-Z0-9]`",
+    );
+    Ok(value)
+}
+
+fn is_attribute_ours(attr: &Attribute) -> bool {
     matches!(&attr.meta, Meta::List(list) if list.path.get_ident().is_some_and(|ident| ident == "table"))
 }
 
@@ -69,24 +97,6 @@ fn parse_meta_list<T>(
             meta.eq_token.span(),
             "expected parentheses: `#[table(...)]`"
         ),
-    }
-}
-
-fn check_ident(ident: &Ident) -> Result<String> {
-    let value = ident.to_string();
-    ensure!(
-        AttributeValueParser::parse(Rule::Ident, &value).is_ok(),
-        ident.span(),
-        "invalid table name, only ascii alphanumeric characters and underscores are allowed: `[_a-zA-Z][_a-zA-Z0-9]`",
-    );
-    Ok(value)
-}
-
-fn column_tuple(columns: Vec<String>) -> TokenStream2 {
-    quote! {
-        ColumnTuple(cow_slice(&[
-            #(Name::new(#columns),)*
-        ]))
     }
 }
 
@@ -138,6 +148,60 @@ impl Parse for ParsedMeta {
     }
 }
 
+fn table_name_tokens(table: String, schema: Option<String>) -> TokenStream2 {
+    let schema = schema.map_or_else(|| quote!(None), |schema| quote!(Some(Name::new(#schema))));
+    quote! {
+        TableName {
+            schema: #schema,
+            name: Name::new(#table),
+        }
+    }
+}
+
+fn column_tuple_tokens(columns: Vec<String>) -> TokenStream2 {
+    quote! {
+        ColumnTuple(Cow::Borrowed(const {
+            &[#(Name::new(#columns),)*]
+        }))
+    }
+}
+
+fn foreign_key_tokens(columns: Vec<String>, references: References) -> TokenStream2 {
+    let columns = column_tuple_tokens(columns);
+    let table = table_name_tokens(references.table, references.schema);
+    let ref_columns = column_tuple_tokens(references.ref_columns);
+    let on_delete = match references.on_delete {
+        ReferentialAction::NoAction => quote!(ReferentialAction::NoAction),
+        ReferentialAction::Restrict => quote!(ReferentialAction::Restrict),
+        ReferentialAction::Cascade => quote!(ReferentialAction::Cascade),
+        ReferentialAction::SetNull { columns } => {
+            let columns = column_tuple_tokens(columns);
+            quote! {
+                ReferentialAction::SetNull {
+                    columns: #columns,
+                }
+            }
+        }
+        ReferentialAction::SetDefault { columns } => {
+            let columns = column_tuple_tokens(columns);
+            quote! {
+                ReferentialAction::SetDefault {
+                    columns: #columns,
+                }
+            }
+        }
+    };
+
+    quote! {
+        Constraint::ForeignKey {
+            columns: #columns,
+            table: #table,
+            ref_columns: #ref_columns,
+            on_delete: #on_delete,
+        }
+    }
+}
+
 enum ReferentialAction {
     NoAction,
     Restrict,
@@ -148,6 +212,7 @@ enum ReferentialAction {
 
 struct References {
     table: String,
+    schema: Option<String>,
     ref_columns: Vec<String>,
     on_delete: ReferentialAction,
 }
@@ -173,9 +238,76 @@ enum ContainerAttribute {
 }
 
 impl ContainerAttribute {
-    fn from_meta(meta: &ParsedMeta) -> Result<Self> {
-        Ok(Self::Check {
-            expr: String::new(),
+    fn from_meta(ParsedMeta { name, value }: &ParsedMeta) -> Result<Self> {
+        Ok(match (name.to_string().as_str(), value) {
+            ("schema", None) => bail!(name.span(), "expected a schema name: `schema = \"my_schema\"`"),
+            ("schema", Some(lit)) => {
+                let src = lit.value();
+                ensure_let!(
+                    Ok(mut pairs) = AttributeValueParser::parse(Rule::Ident, &src),
+                    lit.span(),
+                    "failed to parse schema name, expected an identifier: `[_a-zA-Z][_a-zA-Z0-9]`",
+                );
+                Self::Schema {
+                    name: pairs.next().unwrap().as_str().to_owned(),
+                }
+            },
+            ("primary_key", None) => bail!(
+                name.span(),
+                "expected a value: `primary_key = \"(<column>, …)\"`",
+            ),
+            ("primary_key", Some(lit)) => {
+                let src = lit.value();
+                ensure_let!(
+                    Ok(mut pairs) = AttributeValueParser::parse(Rule::ContainerPrimaryKey, &src),
+                    lit.span(),
+                    "failed to parse primary key description, correct format is `\"(<column>, …)\"`",
+                );
+                Self::PrimaryKey {
+                    columns: extract_column_tuple(pairs.next().unwrap()),
+                }
+            },
+            ("foreign_key", None) => bail!(
+                name.span(),
+                "expected a foreign key constraint description: `foreign_key = \"(<column>, …) <table_name> (<refcolumn>, …) <delete_action>?\"`",
+            ),
+            ("foreign_key", Some(lit)) => {
+                let src = lit.value();
+                ensure_let!(
+                    Ok(mut pairs) = AttributeValueParser::parse(Rule::ContainerForeignKey, &src),
+                    lit.span(),
+                    "failed to parse foreign key constraint description, correct format is `\"(<column>, …) <table_name> (<refcolumn>, …) <delete_action>?\"`",
+                );
+                let columns = extract_column_tuple(pairs.next().unwrap());
+                let references = extract_references(pairs);
+                Self::ForeignKey {
+                    columns,
+                    references,
+                }
+            },
+            ("check", None) => bail!(
+                name.span(),
+                "expected a check expression: `check = \"<sql_expression>\"`",
+            ),
+            ("check", Some(lit)) => Self::Check { 
+                expr: lit.value(),
+            },
+            ("unique", None) => bail!(
+                name.span(),
+                "expected a unique constraint description: `unique = \"(<column>, …) <nulls_not_distinct>?\"`",
+            ),
+            ("unique", Some(lit)) => {
+                let src = lit.value();
+                ensure_let!(
+                    Ok(mut pairs) = AttributeValueParser::parse(Rule::ContainerUnique, &src),
+                    lit.span(),
+                    "failed to parse unique constraint description: `unique = \"(<column>, …) <nulls_not_distinct>?\"`",
+                );
+                let columns = extract_column_tuple(pairs.next().unwrap());
+                let nulls_not_distinct = pairs.next().is_some();
+                Self::Unique { columns, nulls_not_distinct }
+            }
+            _ => bail!(name.span(), "unknown table derive option, expected one of `\"schema\"`, `\"primary_key\"`, `\"foreign_key\"`, `\"check\"` or `\"unique\"`"),
         })
     }
 }
@@ -190,35 +322,29 @@ impl FieldAttribute {
     fn from_meta(ParsedMeta { name, value }: &ParsedMeta) -> Result<Self> {
         Ok(match (name.to_string().as_str(), value) {
             ("primary_key", None) => Self::PrimaryKey,
-            ("primary_key", Some(lit)) => bail!(lit.span(), "expected no string value"),
-            ("foreign_key", None) => bail!(name.span(), "expected a string value in format `\"<table_name> (<refcolumn>) <delete_action>?\"`"),
+            ("primary_key", Some(lit)) => bail!(lit.span(), "expected no value"),
+            ("foreign_key", None) => bail!(name.span(), "expected a foreign key constraint description: `foreign_key = \"<table_name> (<refcolumn>) <delete_action>?\"`"),
             ("foreign_key", Some(lit)) => {
                 let src = lit.value();
                 ensure_let!(
-                    Ok(mut pairs) = AttributeValueParser::parse(Rule::ColumnForeignKey, &src),
+                    Ok(pairs) = AttributeValueParser::parse(Rule::FieldForeignKey, &src),
                     lit.span(),
-                    "failed to parse foreign key descriptor, correct format is `\"<table_name> (<refcolumn>) <delete_action>?\"`",
+                    "failed to parse foreign key constraint description, correct format is `\"<table_name> (<refcolumn>) <delete_action>?\"`",
                 );
-
-                let references = References {
-                    table: pairs.next().unwrap().as_str().to_owned(),
-                    ref_columns: vec![pairs.next().unwrap().as_str().to_owned()],
-                    on_delete: extract_referential_action(pairs.next()),
-                };
-
+                let references = extract_references(pairs);
                 Self::ForeignKey { references }
             },
             ("unique", None) => Self::Unique { nulls_not_distinct: false },
             ("unique", Some(lit)) => {
                 let src = lit.value();
                 ensure!(
-                    AttributeValueParser::parse(Rule::ColumnUnique, &src).is_ok(),
+                    AttributeValueParser::parse(Rule::FieldUnique, &src).is_ok(),
                     lit.span(),
                     "expected either no string value or `\"nulls_not_distinct\"`",
                 );
                 Self::Unique { nulls_not_distinct: true }
             },
-            _ => bail!(name.span(), "unknown table attribute option, expected one of `\"primary_key\"`, `\"foreign_key\"` or `\"unique\"`"),
+            _ => bail!(name.span(), "unknown table derive option, expected one of `\"primary_key\"`, `\"foreign_key\"` or `\"unique\"`"),
         })
     }
 }
@@ -229,7 +355,7 @@ pub fn main(input: TokenStream) -> Result<TokenStream2> {
     let ident = &item.ident;
 
     // Schema data.
-    let name = check_ident(&item.ident)?;
+    let table = check_ident(&item.ident)?;
     let mut schema = None;
     let mut columns = IndexMap::new();
     let mut primary_key = None;
@@ -245,10 +371,10 @@ pub fn main(input: TokenStream) -> Result<TokenStream2> {
         let column = check_ident(field.ident.as_ref().unwrap())?;
 
         for attr in &field.attrs {
-            if !is_attr_ours(attr) {
+            if !is_attribute_ours(attr) {
                 continue;
             }
-    
+
             for (attr, meta) in parse_meta_list(attr, FieldAttribute::from_meta)? {
                 match attr {
                     FieldAttribute::PrimaryKey => {
@@ -257,35 +383,32 @@ pub fn main(input: TokenStream) -> Result<TokenStream2> {
                             meta.name.span(),
                             "only one primary key may be specified by table, remove this attribute"
                         );
-                        primary_key = Some(vec![name.clone()]);
-                    },
+                        primary_key = Some(vec![column.clone()]);
+                    }
                     FieldAttribute::ForeignKey { references } => {
-                        // constraints.push(quote! {
-                        //     Constraint::ForeignKey {
-                        //         // TODO
-                        //     }
-                        // });
-                    },
+                        constraints.push(foreign_key_tokens(vec![column.clone()], references));
+                    }
                     FieldAttribute::Unique { nulls_not_distinct } => {
-                        let columns = column_tuple(vec![name.clone()]);
+                        let columns = column_tuple_tokens(vec![column.clone()]);
                         constraints.push(quote! {
                             Constraint::Unique {
                                 columns: #columns,
                                 nulls_not_distinct: #nulls_not_distinct,
                             }
                         });
-                    },
+                    }
                 }
             }
         }
 
+        // TODO: get the real type of this column
         // let ty = &field.ty;
         // column_types.insert(name, quote!(Cow::Borrowed(<#ty as PgType>::SQL_NAME)));
         columns.insert(column, quote!(Cow::Borrowed("INTEGER")));
     }
 
     for attr in &item.attrs {
-        if !is_attr_ours(attr) {
+        if !is_attribute_ours(attr) {
             continue;
         }
 
@@ -306,49 +429,47 @@ pub fn main(input: TokenStream) -> Result<TokenStream2> {
                         "only one primary key may be specified by table, remove this attribute"
                     );
                     primary_key = Some(columns);
-                },
+                }
                 ContainerAttribute::ForeignKey {
                     columns,
                     references,
                 } => {
-                    // constraints.push(quote! {
-                    //     Constraint::ForeignKey {
-                    //         // TODO
-                    //     }
-                    // });
-                },
+                    constraints.push(foreign_key_tokens(columns, references));
+                }
                 ContainerAttribute::Check { expr } => {
                     constraints.push(quote! {
                         Constraint::Check {
                             expr: Cow::Borrowed(#expr),
                         }
                     });
-                },
+                }
                 ContainerAttribute::Unique {
                     columns,
                     nulls_not_distinct,
                 } => {
-                    let columns = column_tuple(columns);
+                    let columns = column_tuple_tokens(columns);
                     constraints.push(quote! {
                         Constraint::Unique {
                             columns: #columns,
                             nulls_not_distinct: #nulls_not_distinct,
                         }
                     });
-                },
+                }
             }
         }
     }
 
-    let schema = schema.map_or_else(|| quote!(None), |schema| quote!(Name::new(#schema)));
-    let columns = columns.into_iter().map(|(name, ty)| quote! {
-        Column {
-            name: Name::new(#name),
-            ty: #ty,
+    let name = table_name_tokens(table, schema);
+    let columns = columns.into_iter().map(|(name, ty)| {
+        quote! {
+            Column {
+                name: Name::new(#name),
+                ty: #ty,
+            }
         }
     });
     if let Some(primary_key) = primary_key {
-        let primary_key = column_tuple(primary_key);
+        let primary_key = column_tuple_tokens(primary_key);
         constraints.push(quote! {
             Constraint::PrimaryKey {
                 columns: #primary_key,
@@ -359,22 +480,17 @@ pub fn main(input: TokenStream) -> Result<TokenStream2> {
     Ok(quote! {
         const _: () = {
             use ::#this::__proc_macro_util::*;
-
             impl Table for #ident {
                 const SCHEMA: TableSchema = TableSchema {
-                    name: TableName {
-                        schema: #schema,
-                        name: Name::new(#name),
-                    },
-                    columns: cow_slice(&[
-                        #(#columns,)*
-                    ]),
-                    constraints: cow_slice(&[
-                        #(#constraints,)*
-                    ]),
+                    name: #name,
+                    columns: Cow::Borrowed(const {
+                        &[#(#columns,)*]
+                    }),
+                    constraints: Cow::Borrowed(const {
+                        &[#(#constraints,)*]
+                    }),
                 };
             }
-
             submit!(&#ident::SCHEMA);
         };
     })

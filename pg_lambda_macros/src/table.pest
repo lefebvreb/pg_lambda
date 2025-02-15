@@ -1,21 +1,23 @@
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 
 Ident = @{ (("_"+ ~ ASCII_ALPHANUMERIC) | ASCII_ALPHA) ~ (ASCII_ALPHANUMERIC | "_")* }
-IdentTuple = { "(" ~ Ident ~ ("," ~ Ident)* ~ ","? ~ ")" }
+
+TableName = { (Ident ~ ".")? ~ Ident }
+ColumnTuple = { "(" ~ Ident ~ ("," ~ Ident)* ~ ","? ~ ")" }
 
 NoAction = { "no_action" }
 Restrict = { "restrict" }
 Cascade = { "cascade" }
-SetNull = { "set_null" ~ IdentTuple }
-SetDefault = { "set_default" ~ IdentTuple }
+SetNull = { "set_null" ~ ColumnTuple }
+SetDefault = { "set_default" ~ ColumnTuple }
 ReferentialAction = { NoAction | Restrict | Cascade | SetNull | SetDefault }
 
 NullsNotDistinct = { "nulls_not_distinct" }
 
-TableSchema = _{ Ident }
-TablePrimaryKey = _{ IdentTuple }
-TableForeignKey = _{ IdentTuple ~ Ident ~ IdentTuple ~ ReferentialAction? }
-TableUnique = _{ IdentTuple ~ NullsNotDistinct? }
+ContainerSchema = _{ Ident }
+ContainerPrimaryKey = _{ ColumnTuple }
+ContainerForeignKey = _{ ColumnTuple ~ TableName ~ ColumnTuple ~ ReferentialAction? }
+ContainerUnique = _{ ColumnTuple ~ NullsNotDistinct? }
 
-ColumnForeignKey = _{ Ident ~ "(" ~ Ident ~ ")" ~ ReferentialAction? }
-ColumnUnique = _{ NullsNotDistinct? }
+FieldForeignKey = _{ TableName ~ "(" ~ Ident ~ ")" ~ ReferentialAction? }
+FieldUnique = _{ NullsNotDistinct? }
