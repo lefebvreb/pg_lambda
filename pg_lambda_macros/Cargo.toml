@@ -8,6 +8,7 @@ proc-macro = true
 
 [dependencies]
 indexmap = { version = "2.7.1", default-features = false }
+md-5 = { version = "0.10.6", default-features = false }
 pest = { version = "2.7.15", default-features = false, features = ["std"] }
 pest_derive = { version = "2.7.15", default-features = false, features = ["std"] }
 proc-macro-crate = { version = "3.2.0", default-features = false }

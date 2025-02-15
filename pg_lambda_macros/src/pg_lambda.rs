@@ -1,20 +1,27 @@
+use md5::{Digest, Md5};
 use proc_macro::TokenStream;
-use proc_macro2::{Delimiter, TokenStream as TokenStream2, TokenTree};
+use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
-use syn::token::{Brace, Paren};
-use syn::{parenthesized, Ident, Result, ReturnType, Token, Type, Visibility};
+use syn::token::Paren;
+use syn::{parenthesized, Attribute, Ident, Item, LitStr, Result, ReturnType, Token, Type, Visibility};
 
-use crate::util::ensure_let;
+use crate::util;
 
-pub struct Input {
-    pub ident: Ident,
-    pub colon_token: Token![:],
-    pub ty: Box<Type>,
+fn md5(input: &str) -> u128 {
+    let mut hasher = Md5::new();
+    hasher.update(input);
+    u128::from_be_bytes(hasher.finalize().as_slice().try_into().unwrap())
 }
 
-impl Parse for Input {
+struct Arg {
+    ident: Ident,
+    colon_token: Token![:],
+    ty: Box<Type>,
+}
+
+impl Parse for Arg {
     fn parse(input: ParseStream) -> Result<Self> {
         Ok(Self {
             ident: input.parse()?,
@@ -24,46 +31,22 @@ impl Parse for Input {
     }
 }
 
-pub struct Block {
-    pub brace_token: Brace,
-    pub plpgsql: String,
+struct Lambda {
+    attrs: Vec<Attribute>,
+    vis: Visibility,
+    fn_token: Token![fn],
+    ident: Ident,
+    paren_token: Paren,
+    inputs: Punctuated<Arg, Token![,]>,
+    output: ReturnType,
+    block: LitStr,
 }
 
-impl Parse for Block {
-    fn parse(input: ParseStream) -> Result<Self> {
-        let (brace_token, span) = input.step(|cursor| match cursor.token_tree() {
-            Some((TokenTree::Group(g), cursor)) if g.delimiter() == Delimiter::Brace => {
-                Ok(((Brace(g.delim_span()), g.span()), cursor))
-            }
-            _ => Err(cursor.error("expected braces")),
-        })?;
-        ensure_let!(
-            Some(source) = span.source_text(),
-            span,
-            "failed to extract plpgsql code from this `pg_lambda` macro invocation",
-        );
-        let plpgsql = source[1..source.len() - 1].to_owned();
-        Ok(Self {
-            brace_token,
-            plpgsql,
-        })
-    }
-}
-
-pub struct ItemPgLambda {
-    pub vis: Visibility,
-    pub fn_token: Token![fn],
-    pub ident: Ident,
-    pub paren_token: Paren,
-    pub inputs: Punctuated<Input, Token![,]>,
-    pub output: ReturnType,
-    pub block: Block,
-}
-
-impl Parse for ItemPgLambda {
+impl Parse for Lambda {
     fn parse(input: ParseStream) -> Result<Self> {
         let content;
         Ok(Self {
+            attrs: input.call(Attribute::parse_outer)?,
             vis: input.parse()?,
             fn_token: input.parse()?,
             ident: input.parse()?,
@@ -75,11 +58,11 @@ impl Parse for ItemPgLambda {
     }
 }
 
-pub struct MacroInput {
-    pub items: Vec<ItemPgLambda>,
+struct Input {
+    items: Vec<Lambda>,
 }
 
-impl Parse for MacroInput {
+impl Parse for Input {
     fn parse(input: ParseStream) -> Result<Self> {
         let mut items = vec![];
         while !input.is_empty() {
@@ -90,6 +73,23 @@ impl Parse for MacroInput {
 }
 
 pub fn main(input: TokenStream) -> Result<TokenStream2> {
-    let item = syn::parse::<MacroInput>(input)?;
-    Ok(quote!())
+    let input = syn::parse::<Input>(input)?;
+    let this = util::crate_ident();
+    let macro_util = quote!(::#this::__proc_macro_util);
+
+    let mut tokens = Vec::new();
+    
+    for item in input.items {
+        let plpgsql = item.block.value();
+        let md5 = md5(&plpgsql);
+        let name = format!("{}_{md5}", item.ident.to_string());
+        let args = (0..item.inputs.len()).map(|i| format!("${}", i+1)).collect::<Vec<_>>().join(",");
+        let statement = format!("SELECT \"{name}\"({args});");
+
+        tokens.push(quote! {});
+    }
+
+    Ok(quote! {
+        #(#tokens)*
+    })
 }

@@ -1,4 +1,4 @@
-// mod driver;
+pub mod connection;
 pub mod schema;
 pub mod types;
 mod util;
@@ -11,5 +11,8 @@ pub mod __proc_macro_util {
 
     pub use inventory::submit;
 
-    pub use crate::schema::*;
+    pub use crate::schema::{
+        Column, ColumnTuple, Constraint, Name, ReferentialAction, Table, TableName, TableSchema,
+    };
+    pub use crate::types::{FromPg, PgType, ToPg};
 }

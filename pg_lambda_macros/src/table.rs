@@ -401,10 +401,8 @@ pub fn main(input: TokenStream) -> Result<TokenStream2> {
             }
         }
 
-        // TODO: get the real type of this column
-        // let ty = &field.ty;
-        // column_types.insert(name, quote!(Cow::Borrowed(<#ty as PgType>::SQL_NAME)));
-        columns.insert(column, quote!(Cow::Borrowed("INTEGER")));
+        let ty = &field.ty;
+        columns.insert(column, quote!(Cow::Borrowed(<#ty as PgType>::SQL_NAME)));
     }
 
     for attr in &item.attrs {
