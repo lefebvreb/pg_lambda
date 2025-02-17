@@ -489,7 +489,11 @@ pub fn main(input: TokenStream) -> Result<TokenStream2> {
                     }),
                 };
             }
-            submit!(&#ident::SCHEMA);
+            submit! {
+                TableDef {
+                    schema: &<#ident as Table>::SCHEMA,
+                }
+            };
         };
     })
 }

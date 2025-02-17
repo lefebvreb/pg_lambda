@@ -1,4 +1,4 @@
-use pg_lambda::pg_lambda;
+use pg_lambda::lambda::pg_lambda;
 use pg_lambda::types::{Integer, Text};
 
 pg_lambda! {

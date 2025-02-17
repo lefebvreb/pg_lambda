@@ -1,7 +1,7 @@
 use tokio_postgres::types::{FromSql, ToSql, Type};
 use tokio_postgres::Row;
 
-use crate::error::PgLambdaError;
+use crate::lambda::PgLambdaError;
 
 pub trait PgType {
     const SQL_NAME: &str;
@@ -12,10 +12,6 @@ pub trait PgType {
 pub trait ToPgValue<T: PgType>: ToSql + Send + Sync {}
 
 pub trait FromPgValue<'a, T: PgType>: FromSql<'a> {}
-
-pub trait FromQueryResult<'a, T: PgType>: FromSql<'a> {
-    fn from_rows(rows: &'a [Row]) -> Result<Self, PgLambdaError>;
-}
 
 macro_rules! typedefs {
     (
@@ -53,6 +49,13 @@ macro_rules! typedefs {
 }
 
 typedefs! {
+    Void {
+        sql_name: "VOID",
+        oid: Type::VOID,
+        // TODO: switch to () when we are no longer constrained by tokio-postgres
+        from: [Void],
+        to: [Void],
+    },
     Int4 {
         sql_name: "INT4",
         oid: Type::INT4,
@@ -68,11 +71,53 @@ typedefs! {
     },
 }
 
-impl PgType for () {
-    const SQL_NAME: &str = "VOID";
-    fn oid() -> Type {
-        Type::VOID
+// TODO: get rid of this
+const _: () = {
+    impl<'a> FromSql<'a> for Void {
+        fn from_sql(
+            _: &Type,
+            _: &'a [u8],
+        ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+            Ok(Self)
+        }
+
+        fn accepts(ty: &Type) -> bool {
+            ty == &Type::VOID
+        }
     }
+
+    impl ToSql for Void {
+        fn to_sql(
+            &self,
+            _: &Type,
+            _: &mut tokio_postgres::types::private::BytesMut,
+        ) -> Result<tokio_postgres::types::IsNull, Box<dyn std::error::Error + Sync + Send>>
+        {
+            Ok(tokio_postgres::types::IsNull::No)
+        }
+
+        fn accepts(ty: &Type) -> bool {
+            ty == &Type::VOID
+        }
+
+        fn to_sql_checked(
+            &self,
+            ty: &Type,
+            out: &mut tokio_postgres::types::private::BytesMut,
+        ) -> Result<tokio_postgres::types::IsNull, Box<dyn std::error::Error + Sync + Send>>
+        {
+            if !<Self as ToSql>::accepts(ty) {
+                return Err(Box::new(tokio_postgres::types::WrongType::new::<Self>(
+                    ty.clone(),
+                )));
+            }
+            self.to_sql(ty, out)
+        }
+    }
+};
+
+pub trait FromQueryResult<'a, T>: Sized {
+    fn from_rows(rows: &'a [Row]) -> Result<Self, PgLambdaError>;
 }
 
 impl<'a, T: PgType, U: FromPgValue<'a, T>> FromQueryResult<'a, T> for U {
@@ -80,3 +125,19 @@ impl<'a, T: PgType, U: FromPgValue<'a, T>> FromQueryResult<'a, T> for U {
         Ok(rows[0].get(0))
     }
 }
+
+impl<'a, T0: PgType, U0: FromPgValue<'a, T0>> FromQueryResult<'a, (T0,)> for Vec<(U0,)> {
+    fn from_rows(rows: &'a [Row]) -> Result<Self, PgLambdaError> {
+        Ok(rows.iter().map(|row| (row.get(0),)).collect())
+    }
+}
+
+impl<'a, T0: PgType, T1: PgType, U0: FromPgValue<'a, T0>, U1: FromPgValue<'a, T1>>
+    FromQueryResult<'a, (T0, T1)> for Vec<(U0, U1)>
+{
+    fn from_rows(rows: &'a [Row]) -> Result<Self, PgLambdaError> {
+        Ok(rows.iter().map(|row| (row.get(0), row.get(1))).collect())
+    }
+}
+
+// etc.

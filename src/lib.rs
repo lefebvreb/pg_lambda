@@ -1,20 +1,14 @@
 pub mod connection;
-pub mod error;
+pub mod lambda;
 pub mod schema;
 pub mod types;
 
-pub use pg_lambda_macros::pg_lambda;
+pub mod prelude {
+    pub use crate::connection::AsyncConnection;
+    pub use crate::lambda::pg_lambda;
+    pub use crate::schema::Table;
+}
 
 #[doc(hidden)]
-pub mod __proc_macro_util {
-    pub use std::borrow::Cow;
-
-    pub use constcat::concat;
-    pub use inventory::submit;
-
-    pub use crate::connection::PgLambda;
-    pub use crate::schema::{
-        Column, ColumnTuple, Constraint, Name, ReferentialAction, Table, TableName, TableSchema,
-    };
-    pub use crate::types::{FromPgValue, PgType, ToPgValue};
-}
+#[path = "macro_util.rs"]
+pub mod __proc_macro_util;

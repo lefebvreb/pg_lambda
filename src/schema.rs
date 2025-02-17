@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 
 pub use pg_lambda_macros::Table;
 
+use crate::__proc_macro_util::TableDef;
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Name(pub Cow<'static, str>);
@@ -89,16 +91,6 @@ impl Display for ReferentialAction {
         }
     }
 }
-
-// ALTER TABLE name ADD
-// [ CONSTRAINT constraint_name ]
-// { CHECK ( expression ) [ NO INHERIT ] |
-//     UNIQUE [ NULLS [ NOT ] DISTINCT ] ( column_name [, ... ] ) index_parameters |
-//     PRIMARY KEY ( column_name [, ... ] ) index_parameters |
-//     EXCLUDE [ USING index_method ] ( exclude_element WITH operator [, ... ] ) index_parameters [ WHERE ( predicate ) ] |
-//     FOREIGN KEY ( column_name [, ... ] ) REFERENCES reftable [ ( refcolumn [, ... ] ) ]
-//       [ MATCH FULL | MATCH PARTIAL | MATCH SIMPLE ] [ ON DELETE referential_action ] [ ON UPDATE referential_action ] }
-//   [ DEFERRABLE | NOT DEFERRABLE ] [ INITIALLY DEFERRED | INITIALLY IMMEDIATE ]
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
@@ -196,13 +188,16 @@ impl Display for SchemaOp {
             }
             Self::AddConstraint { table, constraint } => {
                 write!(f, "ALTER TABLE {table} ADD CONSTRAINT {constraint};")
-            },
+            }
             Self::DropConstraint {
                 table,
                 constraint_name,
             } => {
-                write!(f, "ALTER TABLE {table} DROP CONSTRAINT \"{constraint_name}\";")
-            },
+                write!(
+                    f,
+                    "ALTER TABLE {table} DROP CONSTRAINT \"{constraint_name}\";"
+                )
+            }
         }
     }
 }
@@ -214,8 +209,6 @@ pub struct TableSchema {
     pub columns: Cow<'static, [Column]>,
     pub constraints: Cow<'static, [Constraint]>,
 }
-
-inventory::collect!(&'static TableSchema);
 
 /// Struct that corresponds to a table definition. Do not implement this trait manually.
 pub trait Table {
@@ -230,9 +223,9 @@ pub struct Schema {
 
 lazy_static! {
     static ref SCHEMA: Schema = Schema {
-        tables: inventory::iter::<&'static TableSchema>
+        tables: inventory::iter::<TableDef>
             .into_iter()
-            .map(|&table| Cow::Borrowed(table))
+            .map(|def| Cow::Borrowed(def.schema))
             .collect(),
     };
 }
