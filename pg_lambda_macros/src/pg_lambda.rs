@@ -169,9 +169,9 @@ pub fn main(input: TokenStream) -> Result<TokenStream2> {
                     #args,
                     ") RETURNS ",
                     #ret,
-                    "LANGUAGE PLPGSQL AS $$ ",
+                    "LANGUAGE PLPGSQL AS $$ BEGIN ",
                     #body,
-                    " $$;"
+                    " END; $$;"
                 );
             };
 
