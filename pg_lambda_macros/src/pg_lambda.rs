@@ -1,11 +1,11 @@
 use md5::{Digest, Md5};
 use proc_macro::TokenStream;
-use proc_macro2::{Span, TokenStream as TokenStream2};
+use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
-use syn::token::Paren;
-use syn::{parenthesized, Attribute, Ident, Lifetime, LitStr, Result, ReturnType, Token, Type, Visibility};
+use syn::token::{Brace, Paren};
+use syn::{braced, parenthesized, Attribute, Ident, LitStr, Result, Token, Type, TypePath, Visibility};
 
 use crate::util;
 
@@ -15,18 +15,53 @@ fn md5(input: &str) -> u128 {
     u128::from_be_bytes(hasher.finalize().as_slice().try_into().unwrap())
 }
 
-struct Arg {
+struct LambdaArg {
     ident: Ident,
     colon_token: Token![:],
     ty: Box<Type>,
 }
 
-impl Parse for Arg {
+impl Parse for LambdaArg {
     fn parse(input: ParseStream) -> Result<Self> {
         Ok(Self {
             ident: input.parse()?,
             colon_token: input.parse()?,
             ty: input.parse()?,
+        })
+    }
+}
+
+enum ReturnType {
+    Default,
+    Type(Token![->], Box<Type>),
+    Table {
+        rarrow: Token![->],
+        _table_ident: Ident,
+        _brace_token: Brace,
+        columns: Punctuated<LambdaArg, Token![,]>,
+    },
+}
+
+impl Parse for ReturnType {
+    fn parse(input: ParseStream) -> Result<Self> {
+        if !input.peek(Token![->]) {
+            return Ok(Self::Default)
+        }
+        
+        let rarrow = input.parse()?;
+        let ty = input.parse::<Box<Type>>()?;
+
+        Ok(match ty.as_ref() {
+            Type::Path(TypePath { path, .. }) if path.is_ident("Table") => {
+                let content;
+                Self::Table { 
+                    rarrow, 
+                    _table_ident: path.get_ident().unwrap().clone(), 
+                    _brace_token: braced!(content in input), 
+                    columns: Punctuated::parse_terminated(&content)?,
+                }
+            },
+            _ => Self::Type(rarrow, ty),
         })
     }
 }
@@ -37,7 +72,7 @@ struct Lambda {
     fn_token: Token![fn],
     ident: Ident,
     _paren_token: Paren,
-    inputs: Punctuated<Arg, Token![,]>,
+    inputs: Punctuated<LambdaArg, Token![,]>,
     output: ReturnType,
     block: LitStr,
 }
@@ -75,32 +110,74 @@ impl Parse for Input {
 pub fn main(input: TokenStream) -> Result<TokenStream2> {
     let input = syn::parse::<Input>(input)?;
     let this = util::crate_ident();
-    let private = quote!(::#this::__proc_macro_util);
+    let macro_util = quote!(::#this::__proc_macro_util);
 
     let mut tokens = Vec::new();
     
     for Lambda { attrs, vis, fn_token, ident, inputs, output, block, .. } in input.items {
-        let (lambda_name, sql_statement) = {
-            let plpgsql = block.value();
-            let md5 = md5(&plpgsql);
-            let name = format!("{}_{md5}", ident.to_string());
-            let args = (0..inputs.len()).map(|i| format!("${}", i+1)).collect::<Vec<_>>().join(",");
-            let statement = format!("SELECT \"{name}\"({args});");
-            (name, statement)
+        let (name, create_statement, select_statement) = {
+            let body = block.value();
+            let md5 = md5(&body); // take inputs/output in account when computing md5 hash
+            let name = format!("{ident}_{md5}");
+
+            let select_params = (1..=inputs.len()).map(|i| format!("${i}")).collect::<Vec<_>>().join(",");
+            let select_statement = format!("SELECT \"{name}\"({select_params});");
+
+            let args = inputs
+                .iter()
+                .map(|LambdaArg { ident, ty, .. }| {
+                    let name = format!("\"{ident}\"");
+                    quote!(#name, <#ty as #macro_util::PgType>::SQL_NAME)
+                })
+                .collect::<Punctuated<_, Token![,]>>();
+
+            let ret = match &output {
+                ReturnType::Default => quote!("VOID"),
+                ReturnType::Type(_, ty) => quote!(<#ty as #macro_util::PgType>::SQL_NAME),
+                ReturnType::Table { columns, .. } => {
+                    let columns = columns
+                        .iter()
+                        .map(|LambdaArg { ident, ty, .. }| {
+                            let name = format!("\"{ident}\"");
+                            quote!(#name, <#ty as #macro_util::PgType>::SQL_NAME)
+                        })
+                        .collect::<Punctuated<_, Token![,]>>();
+                    quote!("TABLE (", #columns, ")")
+                },
+            };
+
+            let create_statement = quote! {
+                #macro_util::concat!(
+                    "CREATE OR REPLACE FUNCTION \"",
+                    #name,
+                    "\"(",
+                    #args,
+                    ") RETURNS ",
+                    #ret,
+                    "LANGUAGE PLPGSQL AS $$ ",
+                    #body,
+                    " $$;"
+                );
+            };
+
+            (name, create_statement, select_statement)
         };
 
         let (lifetime, generics) = match inputs.len() {
-            0 => (Lifetime::new("'static", Span::call_site()), None),
-            _ => {
-                let lifetime = Lifetime::new("'a", Span::call_site());
-                let param = Some(quote!(< #lifetime >));
-                (lifetime, param)
-            },
+            0 => (quote!('static), None),
+            _ => (quote!('a), Some(quote!(<'a>))),
         };
 
-        let output = match output {
-            ReturnType::Default => quote!(-> #private::PgLambda<#lifetime, ()>),
-            ReturnType::Type(rarrow, ty) => quote!(#rarrow #private::PgLambda<#lifetime, #ty>),
+        let output = match &output {
+            ReturnType::Default => quote!(-> #macro_util::PgLambda<#lifetime, ()>),
+            ReturnType::Type(rarrow, ty) => quote!(#rarrow #macro_util::PgLambda<#lifetime, #ty>),
+            ReturnType::Table { rarrow, columns, .. } => {
+                let tuple = columns
+                    .iter()
+                    .map(|arg| &arg.ty)
+                    .collect::<Punctuated<_, Token![,]>>();
+                quote!(#rarrow #macro_util::PgLambda<#lifetime, (#tuple,)>)
+            },
         };
 
         let input_idents = inputs
@@ -110,13 +187,13 @@ pub fn main(input: TokenStream) -> Result<TokenStream2> {
 
         let inputs = inputs
             .into_iter()
-            .map(|Arg { ident, colon_token, ty }| quote!(#ident #colon_token &#lifetime impl #private::ToPgValue<#ty>))
+            .map(|LambdaArg { ident, colon_token, ty }| quote!(#ident #colon_token &#lifetime impl #macro_util::ToPgValue<#ty>))
             .collect::<Punctuated<_, Token![,]>>();
 
         tokens.push(quote! {
             #(#attrs)*
             #vis #fn_token #ident #generics ( #inputs ) #output {
-                #private::PgLambda::new(#sql_statement, Box::new([#input_idents]))
+                #macro_util::PgLambda::new(#select_statement, Box::new([#input_idents]))
             }
         });
     }

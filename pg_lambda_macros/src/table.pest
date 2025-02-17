@@ -1,6 +1,6 @@
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 
-Ident = @{ (("_"+ ~ ASCII_ALPHANUMERIC) | ASCII_ALPHA) ~ (ASCII_ALPHANUMERIC | "_")* }
+Ident = @{ (XID_START ~ XID_CONTINUE*) | ("_" ~ XID_CONTINUE+) }
 
 TableName = { (Ident ~ ".")? ~ Ident }
 ColumnTuple = { "(" ~ Ident ~ ("," ~ Ident)* ~ ","? ~ ")" }

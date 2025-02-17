@@ -9,6 +9,7 @@ pub use pg_lambda_macros::pg_lambda;
 pub mod __proc_macro_util {
     pub use std::borrow::Cow;
 
+    pub use constcat::concat;
     pub use inventory::submit;
 
     pub use crate::connection::PgLambda;

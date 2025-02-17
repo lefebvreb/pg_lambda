@@ -66,7 +66,7 @@ fn check_ident(ident: &Ident) -> Result<String> {
     ensure!(
         AttributeValueParser::parse(Rule::Ident, &value).is_ok(),
         ident.span(),
-        "invalid table name, only ascii alphanumeric characters and underscores are allowed: `[_a-zA-Z][_a-zA-Z0-9]`",
+        "table name must be a valid rust identifier",
     );
     Ok(value)
 }
@@ -246,7 +246,7 @@ impl ContainerAttribute {
                 ensure_let!(
                     Ok(mut pairs) = AttributeValueParser::parse(Rule::Ident, &src),
                     lit.span(),
-                    "failed to parse schema name, expected an identifier: `[_a-zA-Z][_a-zA-Z0-9]`",
+                    "schema name must be a valid rust identifier",
                 );
                 Self::Schema {
                     name: pairs.next().unwrap().as_str().to_owned(),
