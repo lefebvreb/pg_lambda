@@ -1,13 +1,14 @@
 use pg_lambda::pg_lambda;
+use pg_lambda::types::{Integer, Text};
 
 pg_lambda! {
-    pub fn double(x: Integer) -> Integer r#"
+    pub fn function1(x: Integer) -> Integer r#"
         RETURN QUERY SELECT "x" * 2;
     "#
 
-    pub fn square(x: Integer) -> Integer r#"
-        RETURN QUERY SELECT "x" * "x;
-    "#
+    pub fn procedure1() -> Text r#""#
+
+    pub fn procedure2() r#""#
 }
 
 #[test]

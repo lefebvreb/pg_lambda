@@ -1,14 +1,21 @@
 use tokio_postgres::types::{FromSql, ToSql, Type};
+use tokio_postgres::Row;
+
+use crate::error::PgLambdaError;
 
 pub trait PgType {
     const SQL_NAME: &str;
-
     fn oid() -> Type;
 }
 
-pub trait FromPg<'a, T: PgType>: FromSql<'a> {}
+// TODO: probably can remove these Send and Sync when we get rid of tokio-postgres
+pub trait ToPgValue<T: PgType>: ToSql + Send + Sync {}
 
-pub trait ToPg<T: PgType>: ToSql {}
+pub trait FromPgValue<'a, T: PgType>: FromSql<'a> {}
+
+pub trait FromQueryResult<'a, T: PgType>: FromSql<'a> {
+    fn from_rows(rows: &'a [Row]) -> Result<Self, PgLambdaError>;
+}
 
 macro_rules! typedefs {
     (
@@ -31,11 +38,11 @@ macro_rules! typedefs {
             }
 
             $(
-                impl<'a> FromPg<'a, $name> for $from {}
+                impl<'a> FromPgValue<'a, $name> for $from {}
             )*
 
             $(
-                impl ToPg<$name> for $to {}
+                impl ToPgValue<$name> for $to {}
             )*
 
             $(
@@ -59,4 +66,17 @@ typedefs! {
         from: [String, &'a str],
         to: [String],
     },
+}
+
+impl PgType for () {
+    const SQL_NAME: &str = "VOID";
+    fn oid() -> Type {
+        Type::VOID
+    }
+}
+
+impl<'a, T: PgType, U: FromPgValue<'a, T>> FromQueryResult<'a, T> for U {
+    fn from_rows(rows: &'a [Row]) -> Result<Self, PgLambdaError> {
+        Ok(rows[0].get(0))
+    }
 }

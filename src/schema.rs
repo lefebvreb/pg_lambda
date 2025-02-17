@@ -6,8 +6,6 @@ use serde::{Deserialize, Serialize};
 
 pub use pg_lambda_macros::Table;
 
-use crate::util;
-
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Name(pub Cow<'static, str>);
@@ -123,17 +121,6 @@ pub enum Constraint {
     },
 }
 
-impl Constraint {
-    pub fn name(&self) -> Name {
-        // yeah...
-        let json = serde_json::to_string(self).unwrap();
-        Name(Cow::Owned(format!(
-            "constraint_{}",
-            util::sha1(json.as_bytes())
-        )))
-    }
-}
-
 impl Display for Constraint {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
@@ -207,18 +194,15 @@ impl Display for SchemaOp {
             Self::DropColumn { table, column } => {
                 write!(f, "ALTER TABLE {table} DROP COLUMN {column};")
             }
-            Self::AddConstraint { table, constraint } => write!(
-                f,
-                "ALTER TABLE {table} ADD CONSTRAINT {} {constraint};",
-                constraint.name()
-            ),
+            Self::AddConstraint { table, constraint } => {
+                write!(f, "ALTER TABLE {table} ADD CONSTRAINT {constraint};")
+            },
             Self::DropConstraint {
                 table,
                 constraint_name,
-            } => write!(
-                f,
-                "ALTER TABLE {table} DROP CONSTRAINT \"{constraint_name}\";"
-            ),
+            } => {
+                write!(f, "ALTER TABLE {table} DROP CONSTRAINT \"{constraint_name}\";")
+            },
         }
     }
 }
