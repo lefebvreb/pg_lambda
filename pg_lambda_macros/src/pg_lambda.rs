@@ -141,7 +141,7 @@ pub fn main(input: TokenStream) -> Result<TokenStream2> {
             let args = inputs
                 .iter()
                 .map(|LambdaArg { ident, ty, .. }| {
-                    let name = format!("\"{ident}\"");
+                    let name = format!("\"{ident}\" ");
                     quote!(#name, <#ty as #macro_util::PgType>::SQL_NAME)
                 })
                 .collect::<Punctuated<_, Token![,]>>();
@@ -153,7 +153,7 @@ pub fn main(input: TokenStream) -> Result<TokenStream2> {
                     let columns = columns
                         .iter()
                         .map(|LambdaArg { ident, ty, .. }| {
-                            let name = format!("\"{ident}\"");
+                            let name = format!("\"{ident}\" ");
                             quote!(#name, <#ty as #macro_util::PgType>::SQL_NAME)
                         })
                         .collect::<Punctuated<_, Token![,]>>();
@@ -163,16 +163,16 @@ pub fn main(input: TokenStream) -> Result<TokenStream2> {
 
             let create_statement = quote! {
                 #macro_util::concat!(
-                    "CREATE OR REPLACE FUNCTION \"",
+                    "CREATE FUNCTION \"",
                     #name,
                     "\"(",
                     #args,
                     ") RETURNS ",
                     #ret,
-                    "LANGUAGE PLPGSQL AS $$ BEGIN ",
+                    " LANGUAGE PLPGSQL AS $$ BEGIN ",
                     #body,
-                    " END; $$;"
-                );
+                    " END; $$;",
+                )
             };
 
             (name, create_statement, select_statement)
@@ -217,6 +217,13 @@ pub fn main(input: TokenStream) -> Result<TokenStream2> {
             #(#attrs)*
             #vis #fn_token #ident #generics ( #inputs ) #output {
                 #macro_util::create_pg_lambda(#select_statement, Box::new([#input_idents]))
+            }
+
+            #macro_util::submit! {
+                #macro_util::PgLambdaDef {
+                    name: #name,
+                    create_statement: #create_statement,
+                }
             }
         });
     }

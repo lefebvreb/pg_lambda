@@ -10,13 +10,19 @@ name = "pg_lambda"
 version = "0.1.0"
 edition.workspace = true
 
+[features]
+deadpool = ["dep:deadpool", "dep:tokio"]
+
 [dependencies]
 constcat = "0.6.0"
+deadpool = { version = "0.12.2", default-features = false, optional = true, features = ["managed"] }
 inventory = { version = "0.3.19", default-features = false }
 lazy_static = { version = "1.5.0", default-features = false }
 serde = { version = "1.0.217", default-features = false, features = ["derive", "std"] }
 serde_json = { version = "1.0.138", default-features = false, features = ["alloc"] }
-tokio-postgres = { version = "0.7.13", default-features = false }
+thiserror = { version = "2.0.11", default-features = false, features = ["std"] }
+tokio = { version = "1.43.0", default-features = false, optional = true, features = ["rt"] }
+tokio-postgres = { version = "0.7.13", default-features = false, features = ["runtime"] }
 
 [dependencies.pg_lambda_macros]
 path = "pg_lambda_macros"

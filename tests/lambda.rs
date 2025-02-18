@@ -6,10 +6,14 @@ pg_lambda! {
         RETURN QUERY SELECT "x" * 2;
     "#
 
-    pub fn procedure1() -> Text r#""#
+    // pub fn procedure1() -> Text r#""#
 
-    pub fn procedure2() r#""#
+    // pub fn procedure2() r#""#
 }
 
 #[test]
-fn lambda() {}
+fn lambda() {
+    for def in inventory::iter::<pg_lambda::__proc_macro_util::PgLambdaDef> {
+        println!("{}", def.create_statement)
+    }
+}
