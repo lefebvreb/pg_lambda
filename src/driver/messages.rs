@@ -23,12 +23,12 @@ use super::util::*;
 // <F>: Bind
 // <B>: BindComplete | ErrorResponse
 // <F>: Execute
-// <B>: (CommandComplete | DataRow | EmptyQueryResponse | ErrorResponse | NoticeResponse)*
+// <B>: (CommandComplete | DataRow | ErrorResponse | NoticeResponse)*
 //
 // alternatively, if batching with a nonzero row-count in Execute:
 // <B>: PortalSuspended
 // <F>: Execute
-// <B>: (CommandComplete | DataRow | EmptyQueryResponse | ErrorResponse | NoticeResponse)*
+// <B>: (CommandComplete | DataRow | ErrorResponse | NoticeResponse)*
 // <B>: CommandComplete
 //
 // finally:
@@ -372,20 +372,6 @@ impl<'a> BackendMessage<'a> for DataRow<'a> {
             });
         }
         Ok(Self { columns })
-    }
-}
-
-/// https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-EMPTYQUERYRESPONSE
-pub struct EmptyQueryResponse;
-
-impl Message for EmptyQueryResponse {
-    const FIRST_BYTE: Option<u8> = Some(b'I');
-    const CONTENT_LENGTH: Option<i32> = Some(4);
-}
-
-impl BackendMessage<'_> for EmptyQueryResponse {
-    fn read(_: &mut &[u8]) -> Result<Self> {
-        Ok(Self)
     }
 }
 
