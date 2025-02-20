@@ -1,4 +1,5 @@
 pub mod connection;
+pub mod driver;
 pub mod lambda;
 pub mod schema;
 pub mod types;

@@ -1,5 +1,5 @@
 use pg_lambda::lambda::pg_lambda;
-use pg_lambda::types::{Integer, Text};
+use pg_lambda::types::Integer;
 
 pg_lambda! {
     pub fn function1(x: Integer) -> Integer r#"
