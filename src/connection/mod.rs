@@ -1,4 +1,4 @@
-use std::io::{self, Read, Write};
+use std::io::{Result, Read, Write};
 use std::net::TcpStream;
 
 use futures::Stream;
@@ -8,42 +8,12 @@ use util::{read_i32, read_slice};
 mod messages;
 mod util;
 
-pub(crate) trait Transport {
-    async fn read_exact(&mut self, limit: i32, dst: &mut Vec<u8>) -> io::Result<()>;
-
-    async fn write_all(&mut self, src: &[u8]) -> io::Result<()>;
-}
-
-pub struct Config {
-    pub user: String,
-    pub dbname: String,
-    pub host: String,
-}
-
-pub(crate) struct GenericConnection<T> {
-    transport: T,
-    buf: Vec<u8>,
-}
-
-impl<T: Transport> GenericConnection<T> {
-    async fn connect(config: &Config, transport: T) -> Self {
-        Self {
-            transport,
-            buf: Vec::new(),
-        }
-    }
-
-    pub(crate) async fn query<'a>(&mut self, statement: &str, params: ()) -> impl Stream<Item = Row<'a>> {
-        futures::stream::empty()
-    }
-}
-
 pub struct Row<'a> {
     inner: DataRow<'a>,
 }
 
 impl<'a> Iterator for Row<'a> {
-    type Item = io::Result<Option<&'a [u8]>>;
+    type Item = Result<Option<&'a [u8]>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.inner.len == 0 {
@@ -69,17 +39,51 @@ impl ExactSizeIterator for Row<'_> {
     }
 }
 
+pub trait Transport {
+    #[allow(async_fn_in_trait)]
+    async fn read_exact(&mut self, limit: i32, dst: &mut Vec<u8>) -> Result<()>;
+
+    #[allow(async_fn_in_trait)]
+    async fn write_all(&mut self, src: &[u8]) -> Result<()>;
+}
+
+pub trait SyncTransport: Transport {}
+
+pub struct Config {
+    pub user: String,
+    pub dbname: String,
+    pub host: String,
+}
+
+pub struct Connection<T> {
+    transport: T,
+    buf: Vec<u8>,
+}
+
+impl<T: Transport> Connection<T> {
+    async fn connect(config: &Config, transport: T) -> Self {
+        Self {
+            transport,
+            buf: Vec::new(),
+        }
+    }
+
+    pub async fn query<'a>(&mut self, statement: &str, params: ()) -> impl Stream<Item = Row<'a>> {
+        futures::stream::empty()
+    }
+}
+
 impl Transport for TcpStream {
-    async fn read_exact(&mut self, limit: i32, dst: &mut Vec<u8>) -> io::Result<()> {
+    async fn read_exact(&mut self, limit: i32, dst: &mut Vec<u8>) -> Result<()> {
         Read::take(self, limit as u64).read_to_end(dst).map(drop)
     }
 
-    async fn write_all(&mut self, src: &[u8]) -> io::Result<()> {
+    async fn write_all(&mut self, src: &[u8]) -> Result<()> {
         Write::write_all(self, src)
     }
 }
 
-pub struct SyncConnection(GenericConnection<TcpStream>);
+impl SyncTransport for TcpStream {}
 
 // #[cfg(feature = "deadpool")]
 // impl deadpool::managed::Manager for AsyncConnectionManager {

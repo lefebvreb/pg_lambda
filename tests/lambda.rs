@@ -2,7 +2,7 @@ use pg_lambda::lambda::pg_lambda;
 use pg_lambda::types::Integer;
 
 pg_lambda! {
-    pub fn function1(x: Integer) -> Integer r#"
+    pub fn funtion1(x: Integer) -> Integer r#"
         RETURN QUERY SELECT "x" * 2;
     "#
 

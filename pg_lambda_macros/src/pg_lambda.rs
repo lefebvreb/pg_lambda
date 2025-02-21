@@ -1,3 +1,5 @@
+use std::default;
+
 use md5::{Digest, Md5};
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -183,19 +185,19 @@ pub fn main(input: TokenStream) -> Result<TokenStream2> {
             _ => (quote!('a), Some(quote!(<'a>))),
         };
 
-        let output = match &output {
-            ReturnType::Default => quote!(-> #macro_util::PgLambda<#lifetime, ()>),
-            ReturnType::Type(rarrow, ty) => quote!(#rarrow #macro_util::PgLambda<#lifetime, #ty>),
-            ReturnType::Table {
-                rarrow, columns, ..
-            } => {
+        let ret = match output {
+            ReturnType::Default => quote!(()),
+            ReturnType::Type(_, ty) => quote!(#ty),
+            ReturnType::Table { columns, .. } => {
                 let tuple = columns
                     .iter()
                     .map(|arg| &arg.ty)
                     .collect::<Punctuated<_, Token![,]>>();
-                quote!(#rarrow #macro_util::PgLambda<#lifetime, (#tuple,)>)
-            }
+                quote!((#tuple,))
+            },
         };
+
+        let output = quote!(-> #macro_util::PgLambda<impl #macro_util::Fn(&mut #macro_util::Vec<u8>) -> #macro_util::Result<()>, #ret>);
 
         let input_idents = inputs
             .iter()
@@ -216,7 +218,12 @@ pub fn main(input: TokenStream) -> Result<TokenStream2> {
         tokens.push(quote! {
             #(#attrs)*
             #vis #fn_token #ident #generics ( #inputs ) #output {
-                #macro_util::create_pg_lambda(#select_statement, Box::new([#input_idents]))
+                #macro_util::new_lambda(
+                    #select_statement,
+                    |dst| {
+
+                    },
+                )
             }
 
             #macro_util::submit! {

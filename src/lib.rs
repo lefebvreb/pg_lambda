@@ -1,11 +1,9 @@
 pub mod connection;
-pub mod error;
 pub mod lambda;
 pub mod schema;
 pub mod types;
 
 pub mod prelude {
-    pub use crate::connection::SyncConnection;
     pub use crate::lambda::pg_lambda;
     pub use crate::schema::Table;
 }

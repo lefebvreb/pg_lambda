@@ -1,15 +1,14 @@
-use std::io::{self, Read, Write};
+use std::io::{Error, ErrorKind, Read, Result, Write};
 use std::str;
 
 use crate::connection::Row;
-use crate::error::{Result, ValidationError};
 
 pub trait PgType {
     const SQL_NAME: &str;
 }
 
 pub trait ToPgValue<T: PgType> {
-    fn write(&self, dst: &mut Vec<u8>) -> io::Result<()>;
+    fn write(&self, dst: &mut Vec<u8>) -> Result<()>;
 }
 
 pub trait FromPgValue<'a, T: PgType>: Sized {
@@ -17,24 +16,6 @@ pub trait FromPgValue<'a, T: PgType>: Sized {
 
     fn parse(src: &mut &'a [u8]) -> Result<Self>;
 }
-
-// pub struct Void;
-
-// impl PgType for Void {
-//     const SQL_NAME: &str = "VOID";
-// }
-
-// impl ToPgValue<Void> for () {
-//     fn write(&self, _: &mut Vec<u8>) -> Result<()> {
-//         Ok(())
-//     }
-// }
-
-// impl FromPgValue<'_, Void> for () {
-//     fn read(&self, _: &[u8]) -> Result<Self> {
-//         Ok(())
-//     }
-// }
 
 pub struct Int4;
 
@@ -47,7 +28,7 @@ pub type Integer = Int4;
 pub type Int = Int4;
 
 impl ToPgValue<Int4> for i32 {
-    fn write(&self, dst: &mut Vec<u8>) -> io::Result<()> {
+    fn write(&self, dst: &mut Vec<u8>) -> Result<()> {
         dst.write_all(&self.to_be_bytes())
     }
 }
@@ -67,15 +48,14 @@ impl PgType for Text {
 }
 
 impl ToPgValue<Text> for &str {
-    fn write(&self, dst: &mut Vec<u8>) -> io::Result<()> {
+    fn write(&self, dst: &mut Vec<u8>) -> Result<()> {
         dst.write_all(self.as_bytes())
     }
 }
 
-// Maybe this shouldn't be an Error, rather a validation error.
 impl<'a> FromPgValue<'a, Text> for &'a str {
     fn parse(src: &mut &'a [u8]) -> Result<Self> {
-        Ok(str::from_utf8(*src).map_err(ValidationError::Utf8)?)
+        Ok(str::from_utf8(*src).map_err(|e| Error::new(ErrorKind::InvalidData, format!("string is not valid utf8: {e}")))?)
     }
 }
 
@@ -92,10 +72,10 @@ pub trait FromQueryResult<'a, T>: Sized {
 
 impl<'a, T: PgType, U: FromPgValue<'a, T>> FromQueryResult<'a, T> for U {
     fn from_row(mut row: Row<'a>) -> Result<Self> {
-        let column = row.next().ok_or_else(|| io::Error::other("unexpected empty row"))??;
+        let column = row.next().ok_or_else(|| Error::new(ErrorKind::InvalidData, "unexpected empty row"))??;
         match column {
             Some(mut bytes) => U::parse(&mut bytes),
-            None => U::NULL_VALUE.ok_or_else(|| io::Error::other("unexpected null value for not-null type").into()),
+            None => U::NULL_VALUE.ok_or_else(|| Error::new(ErrorKind::InvalidData, "unexpected null value").into()),
         }
     }
 }

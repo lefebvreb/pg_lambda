@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::ffi::CStr;
-use std::io::{Error, Result};
+use std::io::{Error, ErrorKind, Result};
 
 use super::util::*;
 
@@ -130,9 +130,7 @@ impl BackendMessage<'_> for ReadyForQuery {
             b'T' => Self::Transaction,
             b'E' => Self::FailedTransaction,
             n => {
-                return Err(Error::other(format!(
-                    "unknown backend transaction status indicator: 0x{n:x}"
-                )))
+                return Err(Error::new(ErrorKind::InvalidData, format!("unknown backend transaction status indicator: 0x{n:x}")))
             }
         })
     }
@@ -279,25 +277,26 @@ impl BackendMessage<'_> for ParseComplete {
 }
 
 /// https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-BIND
-pub struct Bind<'a> {
-    pub parameters: Vec<&'a [u8]>,
+pub struct Bind<F> {
+    pub num_parameters: i32,
+    pub write_params: F,
 }
 
-impl Message for Bind<'_> {
+impl<F> Message for Bind<F> {
     const FIRST_BYTE: Option<u8> = Some(b'B');
 }
 
-impl FrontendMessage for Bind<'_> {
+impl<F> FrontendMessage for Bind<F>
+where
+    F: Fn(&mut Vec<u8>) -> Result<()>,
+{
     fn write(&self, dst: &mut Vec<u8>) -> Result<()> {
         write_cstr("", dst)?;
         write_cstr("", dst)?;
         write_i16(1, dst)?;
         write_i16(1, dst)?;
-        write_i32(self.parameters.len() as i32, dst)?;
-        for param in &self.parameters {
-            write_i32(param.len() as i32, dst)?;
-            write_slice(param, dst)?;
-        }
+        write_i32(self.num_parameters, dst)?;
+        (self.write_params)(dst)?;
         write_i16(1, dst)?;
         write_i16(1, dst)?;
         Ok(())
