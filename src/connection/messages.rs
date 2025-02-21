@@ -142,8 +142,8 @@ impl BackendMessage<'_> for ReadyForQuery {
 
 // https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-STARTUPMESSAGE
 pub struct StartupMessage<'a> {
-    pub user: &'a CStr,
-    pub database: &'a CStr,
+    pub user: &'a str,
+    pub database: &'a str,
 }
 
 impl Message for StartupMessage<'_> {}
@@ -151,9 +151,9 @@ impl Message for StartupMessage<'_> {}
 impl FrontendMessage for StartupMessage<'_> {
     fn write(&self, dst: &mut Vec<u8>) -> Result<()> {
         write_i32(PROTOCOL_VERSION, dst)?;
-        write_cstr(c"user", dst)?;
+        write_cstr("user", dst)?;
         write_cstr(self.user, dst)?;
-        write_cstr(c"database", dst)?;
+        write_cstr("database", dst)?;
         write_cstr(self.database, dst)?;
         write_u8(0, dst)
     }
@@ -248,7 +248,7 @@ impl<'a> BackendMessage<'a> for ParameterStatus<'a> {
 
 /// https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-PARSE
 pub struct Parse<'a> {
-    pub query: &'a CStr,
+    pub query: &'a str,
 }
 
 impl Message for Parse<'_> {
@@ -257,7 +257,7 @@ impl Message for Parse<'_> {
 
 impl FrontendMessage for Parse<'_> {
     fn write(&self, dst: &mut Vec<u8>) -> Result<()> {
-        write_cstr(c"", dst)?;
+        write_cstr("", dst)?;
         write_cstr(self.query, dst)?;
         write_i16(0, dst)?;
         Ok(())
@@ -289,8 +289,8 @@ impl Message for Bind<'_> {
 
 impl FrontendMessage for Bind<'_> {
     fn write(&self, dst: &mut Vec<u8>) -> Result<()> {
-        write_cstr(c"", dst)?;
-        write_cstr(c"", dst)?;
+        write_cstr("", dst)?;
+        write_cstr("", dst)?;
         write_i16(1, dst)?;
         write_i16(1, dst)?;
         write_i32(self.parameters.len() as i32, dst)?;
@@ -328,7 +328,7 @@ impl Message for Execute {
 
 impl FrontendMessage for Execute {
     fn write(&self, dst: &mut Vec<u8>) -> Result<()> {
-        write_cstr(c"", dst)?;
+        write_cstr("", dst)?;
         write_i32(0, dst)?;
         Ok(())
     }
@@ -364,18 +364,8 @@ impl Message for DataRow<'_> {
 impl<'a> BackendMessage<'a> for DataRow<'a> {
     fn read(src: &mut &'a [u8]) -> Result<Self> {
         let len = read_i16(src)?;
-        // let mut columns = Vec::with_capacity(n as usize);
-        // for _ in 0..n {
-        //     let k = read_i32(src)?;
-        //     columns.push(match k {
-        //         -1 => None,
-        //         k => Some(read_slice(k, src)?),
-        //     });
-        // }
-        Ok(Self {
-            len,
-            bytes: src,
-        })
+        let bytes = read_slice(len as i32, src)?;
+        Ok(Self { len, bytes })
     }
 }
 

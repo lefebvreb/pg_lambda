@@ -42,12 +42,13 @@ pub fn read_cstr<'a>(src: &mut &'a [u8]) -> Result<&'a CStr> {
     Ok(cstr)
 }
 
-pub fn write_cstr(val: &CStr, dst: &mut Vec<u8>) -> Result<()> {
-    dst.write_all(val.to_bytes_with_nul())
+pub fn write_cstr(val: &str, dst: &mut Vec<u8>) -> Result<()> {
+    dst.write_all(val.as_bytes())?;
+    write_u8(b'\0', dst)
 }
 
-pub fn read_slice<'a>(n: i32, src: &mut &'a [u8]) -> Result<&'a [u8]> {
-    let (slice, tail) = src.split_at(n as usize);
+pub fn read_slice<'a>(len: i32, src: &mut &'a [u8]) -> Result<&'a [u8]> {
+    let (slice, tail) = src.split_at(len as usize);
     *src = tail;
     Ok(slice)
 }

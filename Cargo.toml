@@ -14,8 +14,9 @@ edition.workspace = true
 deadpool = ["dep:deadpool"]
 
 [dependencies]
-constcat = "0.6.0"
+constcat = { version = "0.6.0", default-features = false }
 deadpool = { version = "0.12.2", default-features = false, optional = true, features = ["managed"] }
+futures = { version = "0.3.31", default-features = false }
 inventory = { version = "0.3.19", default-features = false }
 lazy_static = { version = "1.5.0", default-features = false }
 serde = { version = "1.0.217", default-features = false, features = ["derive", "std"] }

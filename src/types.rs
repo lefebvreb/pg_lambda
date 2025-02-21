@@ -1,19 +1,21 @@
-use std::ffi::NulError;
-use std::io::{self, Error, Read, Write};
+use std::io::{self, Read, Write};
 use std::str;
 
 use crate::connection::Row;
+use crate::error::{Result, ValidationError};
 
 pub trait PgType {
     const SQL_NAME: &str;
 }
 
-pub trait ToPgValue<T: PgType> {    
+pub trait ToPgValue<T: PgType> {
     fn write(&self, dst: &mut Vec<u8>) -> io::Result<()>;
 }
 
 pub trait FromPgValue<'a, T: PgType>: Sized {
-    fn read(&self, src: &mut &'a [u8]) -> io::Result<Self>;
+    const NULL_VALUE: Option<Self> = None;
+
+    fn parse(src: &mut &'a [u8]) -> Result<Self>;
 }
 
 // pub struct Void;
@@ -23,13 +25,13 @@ pub trait FromPgValue<'a, T: PgType>: Sized {
 // }
 
 // impl ToPgValue<Void> for () {
-//     fn write(&self, _: &mut Vec<u8>) -> io::Result<()> {
+//     fn write(&self, _: &mut Vec<u8>) -> Result<()> {
 //         Ok(())
 //     }
 // }
 
 // impl FromPgValue<'_, Void> for () {
-//     fn read(&self, _: &[u8]) -> io::Result<Self> {
+//     fn read(&self, _: &[u8]) -> Result<Self> {
 //         Ok(())
 //     }
 // }
@@ -51,7 +53,7 @@ impl ToPgValue<Int4> for i32 {
 }
 
 impl FromPgValue<'_, Int4> for i32 {
-    fn read(&self, src: &mut &'_ [u8]) -> io::Result<Self> {
+    fn parse(src: &mut &'_ [u8]) -> Result<Self> {
         let mut buf = [0; 4];
         src.read_exact(&mut buf)?;
         Ok(i32::from_be_bytes(buf))
@@ -70,25 +72,36 @@ impl ToPgValue<Text> for &str {
     }
 }
 
-// Maybe this shouldn't be an io::Error, rather a validation error.
+// Maybe this shouldn't be an Error, rather a validation error.
 impl<'a> FromPgValue<'a, Text> for &'a str {
-    fn read(&self, src: &mut &'a [u8]) -> io::Result<Self> {
-        str::from_utf8(*src).map_err(|e| Error::other(format!("string is not valid UTF8: {e}")))
+    fn parse(src: &mut &'a [u8]) -> Result<Self> {
+        Ok(str::from_utf8(*src).map_err(ValidationError::Utf8)?)
     }
 }
 
+impl<'a> FromPgValue<'a, Text> for String {
+    fn parse(src: &mut &'a [u8]) -> Result<Self> {
+        <&str as FromPgValue<Text>>::parse(src).map(ToOwned::to_owned)
+    }
+}
+
+// IDEA: have multiple separate traits, one for void, one for single value and another for sets.
 pub trait FromQueryResult<'a, T>: Sized {
-    fn from_row(row: Row<'a>) -> io::Result<Self>;
+    fn from_row(row: Row<'a>) -> Result<Self>;
 }
 
 impl<'a, T: PgType, U: FromPgValue<'a, T>> FromQueryResult<'a, T> for U {
-    fn from_row(row: Row<'a>) -> io::Result<Self> {
-        todo!()
+    fn from_row(mut row: Row<'a>) -> Result<Self> {
+        let column = row.next().ok_or_else(|| io::Error::other("unexpected empty row"))??;
+        match column {
+            Some(mut bytes) => U::parse(&mut bytes),
+            None => U::NULL_VALUE.ok_or_else(|| io::Error::other("unexpected null value for not-null type").into()),
+        }
     }
 }
 
 impl<'a, T0: PgType, U0: FromPgValue<'a, T0>> FromQueryResult<'a, (T0,)> for Vec<(U0,)> {
-    fn from_row(row: Row<'a>) -> io::Result<Self> {
+    fn from_row(row: Row<'a>) -> Result<Self> {
         todo!()
     }
 }
@@ -96,7 +109,7 @@ impl<'a, T0: PgType, U0: FromPgValue<'a, T0>> FromQueryResult<'a, (T0,)> for Vec
 impl<'a, T0: PgType, T1: PgType, U0: FromPgValue<'a, T0>, U1: FromPgValue<'a, T1>>
     FromQueryResult<'a, (T0, T1)> for Vec<(U0, U1)>
 {
-    fn from_row(row: Row<'a>) -> io::Result<Self> {
+    fn from_row(row: Row<'a>) -> Result<Self> {
         todo!()
     }
 }

@@ -1,14 +1,10 @@
-use std::io;
 use std::marker::PhantomData;
 
 use crate::connection::SyncConnection;
+use crate::error::Result;
 use crate::types::{FromQueryResult, PgType};
 
 pub use pg_lambda_macros::pg_lambda;
-
-pub enum PgLambdaError {
-    Protocol(io::Error),
-}
 
 pub struct PgLambda<'a, T> {
     pub(crate) statement: &'static str,
@@ -21,7 +17,7 @@ impl<T: PgType> PgLambda<'_, T> {
     pub async fn call_async<'a, U: FromQueryResult<'a, T>>(
         self,
         conn: &'a mut SyncConnection,
-    ) -> Result<U, PgLambdaError> {
+    ) -> Result<U> {
         // conn.rows = conn
         //     .inner
         //     .query(self.statement, &self.params)

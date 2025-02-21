@@ -1,34 +1,41 @@
-use std::ffi::CString;
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
 
+use futures::Stream;
 use messages::DataRow;
+use util::{read_i32, read_slice};
 
 mod messages;
 mod util;
 
-trait Transport {
-    async fn read_exact(&mut self, dst: &mut Vec<u8>, limit: i32) -> io::Result<()>;
+pub(crate) trait Transport {
+    async fn read_exact(&mut self, limit: i32, dst: &mut Vec<u8>) -> io::Result<()>;
 
     async fn write_all(&mut self, src: &[u8]) -> io::Result<()>;
 }
 
 pub struct Config {
-    pub user: CString,
-    pub dbname: CString,
+    pub user: String,
+    pub dbname: String,
     pub host: String,
 }
 
-struct GenericConnection<T> {
+pub(crate) struct GenericConnection<T> {
     transport: T,
+    buf: Vec<u8>,
 }
 
 impl<T: Transport> GenericConnection<T> {
-    pub async fn connect(config: Config) -> Self {
-        todo!()
+    async fn connect(config: &Config, transport: T) -> Self {
+        Self {
+            transport,
+            buf: Vec::new(),
+        }
     }
 
-    // pub async fn query<'a>(&mut self, statement: &str);
+    pub(crate) async fn query<'a>(&mut self, statement: &str, params: ()) -> impl Stream<Item = Row<'a>> {
+        futures::stream::empty()
+    }
 }
 
 pub struct Row<'a> {
@@ -36,16 +43,35 @@ pub struct Row<'a> {
 }
 
 impl<'a> Iterator for Row<'a> {
-    type Item = Option<&'a [u8]>;
+    type Item = io::Result<Option<&'a [u8]>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        todo!()
+        if self.inner.len == 0 {
+            return None;
+        }
+        self.inner.len -= 1;
+        Some(match read_i32(&mut self.inner.bytes) {
+            Ok(-1) => Ok(None),
+            Ok(len) => read_slice(len, &mut self.inner.bytes).map(Some),
+            Err(err) => Err(err),
+        })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.len();
+        (len, Some(len))
+    }
+}
+
+impl ExactSizeIterator for Row<'_> {
+    fn len(&self) -> usize {
+        self.inner.len as usize
     }
 }
 
 impl Transport for TcpStream {
-    async fn read_exact(&mut self, dst: &mut Vec<u8>, limit: i32) -> io::Result<()> {
-        Read::take(self, limit as u64).read_to_end(dst).map(|_| ())
+    async fn read_exact(&mut self, limit: i32, dst: &mut Vec<u8>) -> io::Result<()> {
+        Read::take(self, limit as u64).read_to_end(dst).map(drop)
     }
 
     async fn write_all(&mut self, src: &[u8]) -> io::Result<()> {
@@ -64,7 +90,7 @@ pub struct SyncConnection(GenericConnection<TcpStream>);
 //     async fn create(&self) -> Result<Self::Type, Self::Error> {
 //         let (client, conn) =
 //             tokio_postgres::connect(&self.connection_url, tokio_postgres::NoTls).await?;
-//         tokio::spawn(conn);
+//         tokspawn(conn);
 //         Ok(AsyncConnection {
 //             inner: client,
 //             rows: Vec::default(),
