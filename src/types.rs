@@ -1,143 +1,104 @@
-use tokio_postgres::types::{FromSql, ToSql, Type};
-use tokio_postgres::Row;
+use std::ffi::NulError;
+use std::io::{self, Error, Read, Write};
+use std::str;
 
-use crate::lambda::PgLambdaError;
+use crate::connection::Row;
 
 pub trait PgType {
     const SQL_NAME: &str;
-    fn oid() -> Type;
 }
 
-// TODO: probably can remove these Send and Sync when we get rid of tokio-postgres
-pub trait ToPgValue<T: PgType>: ToSql + Send + Sync {}
-
-pub trait FromPgValue<'a, T: PgType>: FromSql<'a> {}
-
-macro_rules! typedefs {
-    (
-        $(
-            $name:ident {
-                sql_name: $sql_name:literal,
-                oid: $oid:expr,
-                from: [$($from:ty),*],
-                to: [$($to:ty),*],
-                $(aliases: [$($alias:ident),*],)?
-            },
-        )*
-    ) => {
-        $(
-            #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
-            pub struct $name;
-            impl PgType for $name {
-                const SQL_NAME: &str = $sql_name;
-                fn oid() -> Type { $oid }
-            }
-
-            $(
-                impl<'a> FromPgValue<'a, $name> for $from {}
-            )*
-
-            $(
-                impl ToPgValue<$name> for $to {}
-            )*
-
-            $(
-                $(pub type $alias = $name;)*
-            )?
-        )*
-    };
+pub trait ToPgValue<T: PgType> {    
+    fn write(&self, dst: &mut Vec<u8>) -> io::Result<()>;
 }
 
-typedefs! {
-    Void {
-        sql_name: "VOID",
-        oid: Type::VOID,
-        // TODO: switch to () when we are no longer constrained by tokio-postgres
-        from: [Void],
-        to: [Void],
-    },
-    Int4 {
-        sql_name: "INT4",
-        oid: Type::INT4,
-        from: [i32],
-        to: [i32],
-        aliases: [Integer, Int],
-    },
-    Text {
-        sql_name: "TEXT",
-        oid: Type::TEXT,
-        from: [String, &'a str],
-        to: [String],
-    },
+pub trait FromPgValue<'a, T: PgType>: Sized {
+    fn read(&self, src: &mut &'a [u8]) -> io::Result<Self>;
 }
 
-// TODO: get rid of this
-const _: () = {
-    impl<'a> FromSql<'a> for Void {
-        fn from_sql(
-            _: &Type,
-            _: &'a [u8],
-        ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
-            Ok(Self)
-        }
+// pub struct Void;
 
-        fn accepts(ty: &Type) -> bool {
-            ty == &Type::VOID
-        }
+// impl PgType for Void {
+//     const SQL_NAME: &str = "VOID";
+// }
+
+// impl ToPgValue<Void> for () {
+//     fn write(&self, _: &mut Vec<u8>) -> io::Result<()> {
+//         Ok(())
+//     }
+// }
+
+// impl FromPgValue<'_, Void> for () {
+//     fn read(&self, _: &[u8]) -> io::Result<Self> {
+//         Ok(())
+//     }
+// }
+
+pub struct Int4;
+
+impl PgType for Int4 {
+    const SQL_NAME: &str = "INT4";
+}
+
+pub type Integer = Int4;
+
+pub type Int = Int4;
+
+impl ToPgValue<Int4> for i32 {
+    fn write(&self, dst: &mut Vec<u8>) -> io::Result<()> {
+        dst.write_all(&self.to_be_bytes())
     }
+}
 
-    impl ToSql for Void {
-        fn to_sql(
-            &self,
-            _: &Type,
-            _: &mut tokio_postgres::types::private::BytesMut,
-        ) -> Result<tokio_postgres::types::IsNull, Box<dyn std::error::Error + Sync + Send>>
-        {
-            Ok(tokio_postgres::types::IsNull::No)
-        }
-
-        fn accepts(ty: &Type) -> bool {
-            ty == &Type::VOID
-        }
-
-        fn to_sql_checked(
-            &self,
-            ty: &Type,
-            out: &mut tokio_postgres::types::private::BytesMut,
-        ) -> Result<tokio_postgres::types::IsNull, Box<dyn std::error::Error + Sync + Send>>
-        {
-            if !<Self as ToSql>::accepts(ty) {
-                return Err(Box::new(tokio_postgres::types::WrongType::new::<Self>(
-                    ty.clone(),
-                )));
-            }
-            self.to_sql(ty, out)
-        }
+impl FromPgValue<'_, Int4> for i32 {
+    fn read(&self, src: &mut &'_ [u8]) -> io::Result<Self> {
+        let mut buf = [0; 4];
+        src.read_exact(&mut buf)?;
+        Ok(i32::from_be_bytes(buf))
     }
-};
+}
+
+pub struct Text;
+
+impl PgType for Text {
+    const SQL_NAME: &str = "TEXT";
+}
+
+impl ToPgValue<Text> for &str {
+    fn write(&self, dst: &mut Vec<u8>) -> io::Result<()> {
+        dst.write_all(self.as_bytes())
+    }
+}
+
+// Maybe this shouldn't be an io::Error, rather a validation error.
+impl<'a> FromPgValue<'a, Text> for &'a str {
+    fn read(&self, src: &mut &'a [u8]) -> io::Result<Self> {
+        str::from_utf8(*src).map_err(|e| Error::other(format!("string is not valid UTF8: {e}")))
+    }
+}
 
 pub trait FromQueryResult<'a, T>: Sized {
-    fn from_rows(rows: &'a [Row]) -> Result<Self, PgLambdaError>;
+    fn from_row(row: Row<'a>) -> io::Result<Self>;
 }
 
 impl<'a, T: PgType, U: FromPgValue<'a, T>> FromQueryResult<'a, T> for U {
-    fn from_rows(rows: &'a [Row]) -> Result<Self, PgLambdaError> {
-        Ok(rows[0].get(0))
+    fn from_row(row: Row<'a>) -> io::Result<Self> {
+        todo!()
     }
 }
 
 impl<'a, T0: PgType, U0: FromPgValue<'a, T0>> FromQueryResult<'a, (T0,)> for Vec<(U0,)> {
-    fn from_rows(rows: &'a [Row]) -> Result<Self, PgLambdaError> {
-        Ok(rows.iter().map(|row| (row.get(0),)).collect())
+    fn from_row(row: Row<'a>) -> io::Result<Self> {
+        todo!()
     }
 }
 
 impl<'a, T0: PgType, T1: PgType, U0: FromPgValue<'a, T0>, U1: FromPgValue<'a, T1>>
     FromQueryResult<'a, (T0, T1)> for Vec<(U0, U1)>
 {
-    fn from_rows(rows: &'a [Row]) -> Result<Self, PgLambdaError> {
-        Ok(rows.iter().map(|row| (row.get(0), row.get(1))).collect())
+    fn from_row(row: Row<'a>) -> io::Result<Self> {
+        todo!()
     }
 }
 
-// etc.
+// // etc.

@@ -353,7 +353,8 @@ impl<'a> BackendMessage<'a> for CommandComplete<'a> {
 
 /// https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-DATAROW
 pub struct DataRow<'a> {
-    pub columns: Vec<Option<&'a [u8]>>,
+    pub len: i16,
+    pub bytes: &'a [u8],
 }
 
 impl Message for DataRow<'_> {
@@ -362,16 +363,19 @@ impl Message for DataRow<'_> {
 
 impl<'a> BackendMessage<'a> for DataRow<'a> {
     fn read(src: &mut &'a [u8]) -> Result<Self> {
-        let n = read_i16(src)?;
-        let mut columns = Vec::with_capacity(n as usize);
-        for _ in 0..n {
-            let k = read_i32(src)?;
-            columns.push(match k {
-                -1 => None,
-                k => Some(read_slice(k, src)?),
-            });
-        }
-        Ok(Self { columns })
+        let len = read_i16(src)?;
+        // let mut columns = Vec::with_capacity(n as usize);
+        // for _ in 0..n {
+        //     let k = read_i32(src)?;
+        //     columns.push(match k {
+        //         -1 => None,
+        //         k => Some(read_slice(k, src)?),
+        //     });
+        // }
+        Ok(Self {
+            len,
+            bytes: src,
+        })
     }
 }
 

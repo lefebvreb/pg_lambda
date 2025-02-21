@@ -1,3 +1,4 @@
+use std::any::Any;
 pub use std::borrow::Cow;
 use std::marker::PhantomData;
 
@@ -25,11 +26,11 @@ inventory::collect!(PgLambdaDef);
 
 pub fn create_pg_lambda<'a, T>(
     statement: &'static str,
-    params: Box<[&'a (dyn tokio_postgres::types::ToSql + Sync)]>,
+    params: Box<[&'a dyn Any]>,
 ) -> PgLambda<'a, T> {
     PgLambda {
         statement,
-        params,
+        // params,
         _marker: PhantomData,
     }
 }
