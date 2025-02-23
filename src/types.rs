@@ -175,11 +175,3 @@ impl<'a, T0: PgType, U0: FromPgValue<'a, T0>> FromQueryResult<'a, AnonymousTable
         todo!()
     }
 }
-
-// impl<'a, T0: PgType, T1: PgType, U0: FromPgValue<'a, T0>, U1: FromPgValue<'a, T1>>
-//     FromQueryResult<'a, (T0, T1)> for Vec<(U0, U1)>
-// {
-//     fn from_row(row: Row<'a>) -> Result<Self> {
-//         todo!()
-//     }
-// }

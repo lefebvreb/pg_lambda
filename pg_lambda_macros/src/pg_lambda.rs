@@ -1,7 +1,7 @@
 use md5::{Digest, Md5};
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::quote;
+use quote::{quote, ToTokens};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::token::Paren;
@@ -10,12 +10,6 @@ use syn::{
 };
 
 use crate::util;
-
-fn md5(input: &str) -> u128 {
-    let mut hasher = Md5::new();
-    hasher.update(input);
-    u128::from_be_bytes(hasher.finalize().as_slice().try_into().unwrap())
-}
 
 struct LambdaArg {
     ident: Ident,
@@ -62,7 +56,8 @@ struct Lambda {
     vis: Visibility,
     fn_token: Token![fn],
     ident: Ident,
-    _paren_token: Paren,
+    #[allow(dead_code)]
+    paren_token: Paren,
     inputs: Punctuated<LambdaArg, Token![,]>,
     output: ReturnType,
     block: LitStr,
@@ -76,7 +71,7 @@ impl Parse for Lambda {
             vis: input.parse()?,
             fn_token: input.parse()?,
             ident: input.parse()?,
-            _paren_token: parenthesized!(content in input),
+            paren_token: parenthesized!(content in input),
             inputs: Punctuated::parse_terminated(&content)?,
             output: input.parse()?,
             block: input.parse()?,
@@ -118,7 +113,28 @@ pub fn main(input: TokenStream) -> Result<TokenStream2> {
     {
         let (name, create_statement, select_statement) = {
             let body = block.value();
-            let md5 = md5(&body); // take inputs/output in account when computing md5 hash
+
+            let md5 = {
+                let mut hasher = Md5::new();
+                hasher.update(&ident.to_string());
+                hasher.update(&body);
+                for input in &inputs {
+                    hasher.update(&input.ident.to_string());
+                    hasher.update(&input.ty.to_token_stream().to_string());
+                }
+                match &output {
+                    ReturnType::Default => (),
+                    ReturnType::Type(ty) => hasher.update(&ty.to_token_stream().to_string()),
+                    ReturnType::Table(columns) => {
+                        for column in columns {
+                            hasher.update(&column.ident.to_string());
+                            hasher.update(&column.ty.to_token_stream().to_string());
+                        }
+                    }
+                }
+                u128::from_be_bytes(hasher.finalize().as_slice().try_into().unwrap())
+            };
+
             let name = format!("{ident}_{md5}");
 
             let select_params = (1..=inputs.len())
@@ -172,7 +188,7 @@ pub fn main(input: TokenStream) -> Result<TokenStream2> {
             ReturnType::Type(ty) => quote!(#ty),
             ReturnType::Table(columns) => {
                 let tuple = columns.iter().map(|arg| &arg.ty);
-                quote!((#(#tuple,)*))
+                quote!(#macro_util::AnonymousTable<(#(#tuple,)*)>)
             }
         };
 
