@@ -1,12 +1,10 @@
-use std::default;
-
 use md5::{Digest, Md5};
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
-use syn::token::{Brace, Paren};
+use syn::token::Paren;
 use syn::{
     braced, parenthesized, Attribute, Ident, LitStr, Result, Token, Type, TypePath, Visibility,
 };
@@ -37,13 +35,8 @@ impl Parse for LambdaArg {
 
 enum ReturnType {
     Default,
-    Type(Token![->], Box<Type>),
-    Table {
-        rarrow: Token![->],
-        _table_ident: Ident,
-        _brace_token: Brace,
-        columns: Punctuated<LambdaArg, Token![,]>,
-    },
+    Type(Box<Type>),
+    Table(Punctuated<LambdaArg, Token![,]>),
 }
 
 impl Parse for ReturnType {
@@ -51,21 +44,15 @@ impl Parse for ReturnType {
         if !input.peek(Token![->]) {
             return Ok(Self::Default);
         }
-
-        let rarrow = input.parse()?;
+        input.parse::<Token![->]>()?;
         let ty = input.parse::<Box<Type>>()?;
-
         Ok(match ty.as_ref() {
             Type::Path(TypePath { path, .. }) if path.is_ident("Table") => {
                 let content;
-                Self::Table {
-                    rarrow,
-                    _table_ident: path.get_ident().unwrap().clone(),
-                    _brace_token: braced!(content in input),
-                    columns: Punctuated::parse_terminated(&content)?,
-                }
+                braced!(content in input);
+                Self::Table(Punctuated::parse_terminated(&content)?)
             }
-            _ => Self::Type(rarrow, ty),
+            _ => Self::Type(ty),
         })
     }
 }
@@ -138,28 +125,23 @@ pub fn main(input: TokenStream) -> Result<TokenStream2> {
                 .map(|i| format!("${i}"))
                 .collect::<Vec<_>>()
                 .join(",");
+
             let select_statement = format!("SELECT \"{name}\"({select_params});");
 
-            let args = inputs
-                .iter()
-                .map(|LambdaArg { ident, ty, .. }| {
-                    let name = format!("\"{ident}\" ");
-                    quote!(#name, <#ty as #macro_util::PgType>::SQL_NAME)
-                })
-                .collect::<Punctuated<_, Token![,]>>();
+            let args = inputs.iter().map(|LambdaArg { ident, ty, .. }| {
+                let name = format!("\"{ident}\" ");
+                quote!(#name, <#ty as #macro_util::PgType>::SQL_NAME)
+            });
 
             let ret = match &output {
                 ReturnType::Default => quote!("VOID"),
-                ReturnType::Type(_, ty) => quote!(<#ty as #macro_util::PgType>::SQL_NAME),
-                ReturnType::Table { columns, .. } => {
-                    let columns = columns
-                        .iter()
-                        .map(|LambdaArg { ident, ty, .. }| {
-                            let name = format!("\"{ident}\" ");
-                            quote!(#name, <#ty as #macro_util::PgType>::SQL_NAME)
-                        })
-                        .collect::<Punctuated<_, Token![,]>>();
-                    quote!("TABLE (", #columns, ")")
+                ReturnType::Type(ty) => quote!(<#ty as #macro_util::PgType>::SQL_NAME),
+                ReturnType::Table(columns) => {
+                    let columns = columns.iter().map(|LambdaArg { ident, ty, .. }| {
+                        let name = format!("\"{ident}\" ");
+                        quote!(#name, <#ty as #macro_util::PgType>::SQL_NAME)
+                    });
+                    quote!("TABLE (", #(#columns,)* ")")
                 }
             };
 
@@ -168,7 +150,7 @@ pub fn main(input: TokenStream) -> Result<TokenStream2> {
                     "CREATE FUNCTION \"",
                     #name,
                     "\"(",
-                    #args,
+                    #(#args,)*
                     ") RETURNS ",
                     #ret,
                     " LANGUAGE PLPGSQL AS $$ BEGIN ",
@@ -187,41 +169,40 @@ pub fn main(input: TokenStream) -> Result<TokenStream2> {
 
         let ret = match output {
             ReturnType::Default => quote!(()),
-            ReturnType::Type(_, ty) => quote!(#ty),
-            ReturnType::Table { columns, .. } => {
-                let tuple = columns
-                    .iter()
-                    .map(|arg| &arg.ty)
-                    .collect::<Punctuated<_, Token![,]>>();
-                quote!((#tuple,))
-            },
+            ReturnType::Type(ty) => quote!(#ty),
+            ReturnType::Table(columns) => {
+                let tuple = columns.iter().map(|arg| &arg.ty);
+                quote!((#(#tuple,)*))
+            }
         };
 
-        let output = quote!(-> #macro_util::PgLambda<impl #macro_util::Fn(&mut #macro_util::Vec<u8>) -> #macro_util::Result<()>, #ret>);
+        let output = quote!(-> #macro_util::PgLambda<impl #macro_util::Fn(&mut #macro_util::Vec<u8>) -> #macro_util::Result<()> + #lifetime, #ret>);
 
-        let input_idents = inputs
-            .iter()
-            .map(|arg| arg.ident.clone())
-            .collect::<Punctuated<_, Token![,]>>();
+        let argcount = inputs.len() as i32;
 
-        let inputs = inputs
-            .into_iter()
-            .map(
-                |LambdaArg {
-                     ident,
-                     colon_token,
-                     ty,
-                 }| quote!(#ident #colon_token &#lifetime impl #macro_util::ToPgValue<#ty>),
-            )
-            .collect::<Punctuated<_, Token![,]>>();
+        let write_args = inputs.iter().map(|LambdaArg { ident, .. }| {
+            quote! {
+                #macro_util::write_arg(#ident, dst)?;
+            }
+        });
+
+        let inputs = inputs.iter().map(
+            |LambdaArg {
+                 ident,
+                 colon_token,
+                 ty,
+             }| quote!(#ident #colon_token &#lifetime impl #macro_util::ToPgValue<#ty>),
+        );
 
         tokens.push(quote! {
             #(#attrs)*
-            #vis #fn_token #ident #generics ( #inputs ) #output {
+            #vis #fn_token #ident #generics (#(#inputs,)*) #output {
                 #macro_util::new_lambda(
                     #select_statement,
-                    |dst| {
-
+                    |dst: &mut _| {
+                        #macro_util::write_argcount(#argcount, dst);
+                        #(#write_args)*
+                        Ok(())
                     },
                 )
             }

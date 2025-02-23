@@ -8,13 +8,19 @@ pub trait PgType {
 }
 
 pub trait ToPgValue<T: PgType> {
+    fn is_null(&self) -> bool {
+        false
+    }
+
     fn write(&self, dst: &mut Vec<u8>) -> Result<()>;
 }
 
 pub trait FromPgValue<'a, T: PgType>: Sized {
-    const NULL_VALUE: Option<Self> = None;
+    fn null() -> Result<Self> {
+        return Err(Error::new(ErrorKind::InvalidData, "unexpected null value"));
+    }
 
-    fn parse(src: &mut &'a [u8]) -> Result<Self>;
+    fn read(src: &mut &'a [u8]) -> Result<Self>;
 }
 
 pub struct Int4;
@@ -34,7 +40,7 @@ impl ToPgValue<Int4> for i32 {
 }
 
 impl FromPgValue<'_, Int4> for i32 {
-    fn parse(src: &mut &'_ [u8]) -> Result<Self> {
+    fn read(src: &mut &'_ [u8]) -> Result<Self> {
         let mut buf = [0; 4];
         src.read_exact(&mut buf)?;
         Ok(i32::from_be_bytes(buf))
@@ -54,14 +60,19 @@ impl ToPgValue<Text> for &str {
 }
 
 impl<'a> FromPgValue<'a, Text> for &'a str {
-    fn parse(src: &mut &'a [u8]) -> Result<Self> {
-        Ok(str::from_utf8(*src).map_err(|e| Error::new(ErrorKind::InvalidData, format!("string is not valid utf8: {e}")))?)
+    fn read(src: &mut &'a [u8]) -> Result<Self> {
+        Ok(str::from_utf8(*src).map_err(|e| {
+            Error::new(
+                ErrorKind::InvalidData,
+                format!("string is not valid utf8: {e}"),
+            )
+        })?)
     }
 }
 
 impl<'a> FromPgValue<'a, Text> for String {
-    fn parse(src: &mut &'a [u8]) -> Result<Self> {
-        <&str as FromPgValue<Text>>::parse(src).map(ToOwned::to_owned)
+    fn read(src: &mut &'a [u8]) -> Result<Self> {
+        <&str as FromPgValue<Text>>::read(src).map(ToOwned::to_owned)
     }
 }
 
@@ -72,10 +83,12 @@ pub trait FromQueryResult<'a, T>: Sized {
 
 impl<'a, T: PgType, U: FromPgValue<'a, T>> FromQueryResult<'a, T> for U {
     fn from_row(mut row: Row<'a>) -> Result<Self> {
-        let column = row.next().ok_or_else(|| Error::new(ErrorKind::InvalidData, "unexpected empty row"))??;
+        let column = row
+            .next()
+            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "unexpected empty row"))??;
         match column {
-            Some(mut bytes) => U::parse(&mut bytes),
-            None => U::NULL_VALUE.ok_or_else(|| Error::new(ErrorKind::InvalidData, "unexpected null value").into()),
+            Some(mut bytes) => U::read(&mut bytes),
+            None => U::null(),
         }
     }
 }
@@ -93,5 +106,3 @@ impl<'a, T0: PgType, T1: PgType, U0: FromPgValue<'a, T0>, U1: FromPgValue<'a, T1
         todo!()
     }
 }
-
-// // etc.

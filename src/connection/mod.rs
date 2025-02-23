@@ -1,4 +1,4 @@
-use std::io::{Result, Read, Write};
+use std::io::{Read, Result, Write};
 use std::net::TcpStream;
 
 use futures::Stream;
@@ -39,11 +39,12 @@ impl ExactSizeIterator for Row<'_> {
     }
 }
 
-pub trait Transport {
-    #[allow(async_fn_in_trait)]
+#[allow(async_fn_in_trait)]
+pub trait Transport: Sized {
+    async fn connect(config: &Config) -> Result<Self>;
+    
     async fn read_exact(&mut self, limit: i32, dst: &mut Vec<u8>) -> Result<()>;
 
-    #[allow(async_fn_in_trait)]
     async fn write_all(&mut self, src: &[u8]) -> Result<()>;
 }
 
@@ -61,11 +62,11 @@ pub struct Connection<T> {
 }
 
 impl<T: Transport> Connection<T> {
-    async fn connect(config: &Config, transport: T) -> Self {
-        Self {
-            transport,
+    pub async fn connect(config: &Config) -> Result<Self> {
+        Ok(Self {
+            transport: T::connect(config).await?,
             buf: Vec::new(),
-        }
+        })
     }
 
     pub async fn query<'a>(&mut self, statement: &str, params: ()) -> impl Stream<Item = Row<'a>> {
@@ -74,6 +75,10 @@ impl<T: Transport> Connection<T> {
 }
 
 impl Transport for TcpStream {
+    async fn connect(config: &Config) -> Result<Self> {
+        Self::connect(&config.host)
+    }
+    
     async fn read_exact(&mut self, limit: i32, dst: &mut Vec<u8>) -> Result<()> {
         Read::take(self, limit as u64).read_to_end(dst).map(drop)
     }

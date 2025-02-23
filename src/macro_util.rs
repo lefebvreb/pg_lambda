@@ -2,7 +2,6 @@ pub use std::borrow::Cow;
 pub use std::io::Result;
 pub use std::ops::Fn;
 pub use std::vec::Vec;
-use std::marker::PhantomData;
 
 pub use constcat::concat;
 pub use inventory::submit;
@@ -26,19 +25,27 @@ pub struct PgLambdaDef {
 
 inventory::collect!(PgLambdaDef);
 
-pub fn new_lambda<Args, Output>(statement: &'static str, args: Args) -> PgLambda<Args, Output> {
+pub fn new_lambda<F, R>(statement: &'static str, args: F) -> PgLambda<F, R> {
     PgLambda {
         statement,
         args,
-        _marker: PhantomData,
+        _marker: std::marker::PhantomData,
     }
 }
 
-pub fn write_sized<T: PgType, U: ToPgValue<T>>(value: &U, dst: &mut Vec<u8>) -> Result<()> {
-    let len = dst.len();
-    dst.extend([0; 4]);
-    U::write(value, dst)?;
-    let size = dst.len() - len;
-    dst[len..len+4].copy_from_slice(&size.to_be_bytes());
+pub fn write_argcount(count: i32, dst: &mut Vec<u8>) {
+    dst.extend(&count.to_be_bytes());
+}
+
+pub fn write_arg<T: PgType, U: ToPgValue<T>>(value: &U, dst: &mut Vec<u8>) -> Result<()> {
+    if value.is_null() {
+        dst.extend(&(-1i32).to_be_bytes());
+    } else {
+        let len = dst.len();
+        dst.extend([0; 4]);
+        U::write(value, dst)?;
+        let size = (dst.len() - len) as i32;
+        dst[len..len + 4].copy_from_slice(&size.to_be_bytes());
+    }
     Ok(())
 }

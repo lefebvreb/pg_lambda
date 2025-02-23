@@ -130,7 +130,10 @@ impl BackendMessage<'_> for ReadyForQuery {
             b'T' => Self::Transaction,
             b'E' => Self::FailedTransaction,
             n => {
-                return Err(Error::new(ErrorKind::InvalidData, format!("unknown backend transaction status indicator: 0x{n:x}")))
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    format!("unknown backend transaction status indicator: 0x{n:x}"),
+                ))
             }
         })
     }
@@ -278,7 +281,6 @@ impl BackendMessage<'_> for ParseComplete {
 
 /// https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-BIND
 pub struct Bind<F> {
-    pub num_parameters: i32,
     pub write_params: F,
 }
 
@@ -295,7 +297,6 @@ where
         write_cstr("", dst)?;
         write_i16(1, dst)?;
         write_i16(1, dst)?;
-        write_i32(self.num_parameters, dst)?;
         (self.write_params)(dst)?;
         write_i16(1, dst)?;
         write_i16(1, dst)?;

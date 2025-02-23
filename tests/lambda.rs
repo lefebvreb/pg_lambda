@@ -2,11 +2,13 @@ use pg_lambda::lambda::pg_lambda;
 use pg_lambda::types::Integer;
 
 pg_lambda! {
-    pub fn funtion1(x: Integer) -> Integer r#"
+    pub fn double(x: Integer) -> Integer r#"
         RETURN QUERY SELECT "x" * 2;
     "#
 
-    // pub fn procedure1() -> Text r#""#
+    pub fn procedure1() r#"
+
+    "#
 
     // pub fn procedure2() r#""#
 }

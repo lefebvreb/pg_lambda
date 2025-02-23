@@ -7,22 +7,30 @@ pub use pg_lambda_macros::pg_lambda;
 use crate::connection::{Connection, SyncTransport, Transport};
 use crate::types::FromQueryResult;
 
-pub struct PgLambda<Args, Output> {
+pub struct PgLambda<F, R> {
     pub(crate) statement: &'static str,
-    pub(crate) args: Args,
-    pub(crate) _marker: PhantomData<Output>,
+    pub(crate) args: F,
+    pub(crate) _marker: PhantomData<R>,
 }
 
-impl<Args, Output> PgLambda<Args, Output>
+impl<F, R> PgLambda<F, R>
 where
-    Args: Fn(&mut Vec<u8>) -> Result<()>,
+    F: Fn(&mut Vec<u8>) -> Result<()>,
 {
-    pub async fn call_async<'a, T: FromQueryResult<'a, Output>>(self, conn: &'a mut Connection<impl Transport>) -> Result<T> {
+    pub async fn call_async<'a, T: FromQueryResult<'a, R>>(
+        self,
+        conn: &'a mut Connection<impl Transport>,
+    ) -> Result<T> {
         todo!()
     }
 
-    pub fn call<'a, T: FromQueryResult<'a, Output>>(self, conn: &'a mut Connection<impl SyncTransport>) -> Result<T> {
-        self.call_async(conn).now_or_never().expect("transport was not async")
+    pub fn call<'a, T: FromQueryResult<'a, R>>(
+        self,
+        conn: &'a mut Connection<impl SyncTransport>,
+    ) -> Result<T> {
+        self.call_async(conn)
+            .now_or_never()
+            .expect("transport was not async")
     }
 }
 
