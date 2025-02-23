@@ -116,19 +116,19 @@ pub fn main(input: TokenStream) -> Result<TokenStream2> {
 
             let md5 = {
                 let mut hasher = Md5::new();
-                hasher.update(&ident.to_string());
+                hasher.update(ident.to_string());
                 hasher.update(&body);
                 for input in &inputs {
-                    hasher.update(&input.ident.to_string());
-                    hasher.update(&input.ty.to_token_stream().to_string());
+                    hasher.update(input.ident.to_string());
+                    hasher.update(input.ty.to_token_stream().to_string());
                 }
                 match &output {
                     ReturnType::Default => (),
-                    ReturnType::Type(ty) => hasher.update(&ty.to_token_stream().to_string()),
+                    ReturnType::Type(ty) => hasher.update(ty.to_token_stream().to_string()),
                     ReturnType::Table(columns) => {
                         for column in columns {
-                            hasher.update(&column.ident.to_string());
-                            hasher.update(&column.ty.to_token_stream().to_string());
+                            hasher.update(column.ident.to_string());
+                            hasher.update(column.ty.to_token_stream().to_string());
                         }
                     }
                 }

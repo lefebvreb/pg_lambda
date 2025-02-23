@@ -21,7 +21,7 @@ pub trait ToPgValue<T: PgType> {
 
 pub trait FromPgValue<'a, T: PgType>: Sized {
     fn null() -> Result<Self> {
-        return Err(Error::new(ErrorKind::InvalidData, "unexpected null value"));
+        Err(Error::new(ErrorKind::InvalidData, "unexpected null value"))
     }
 
     fn read(src: &mut &'a [u8]) -> Result<Self>;
@@ -65,12 +65,12 @@ impl ToPgValue<Text> for &str {
 
 impl<'a> FromPgValue<'a, Text> for &'a str {
     fn read(src: &mut &'a [u8]) -> Result<Self> {
-        Ok(str::from_utf8(*src).map_err(|e| {
+        str::from_utf8(src).map_err(|e| {
             Error::new(
                 ErrorKind::InvalidData,
                 format!("string is not valid utf8: {e}"),
             )
-        })?)
+        })
     }
 }
 

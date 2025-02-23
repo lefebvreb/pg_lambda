@@ -4,8 +4,8 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures::Stream;
-use messages::DataRow;
-use util::{read_i32, read_slice};
+use messages::{DataRow, FrontendMessage};
+use util::{read_i32, read_slice, write_i32};
 
 mod impls;
 mod messages;
@@ -76,6 +76,32 @@ pub struct Connection<T> {
 }
 
 impl<T: Transport> Connection<T> {
+    async fn recycle(&mut self) {
+        if self
+            .max_buffer_capacity
+            .is_some_and(|max| self.buffer.capacity() > max)
+        {
+            self.buffer = Vec::new();
+        }
+    }
+
+    fn write_message<M: FrontendMessage>(&mut self, msg: M) -> Result<()> {
+        if let Some(byte) = M::FIRST_BYTE {
+            self.buffer.push(byte);
+        }
+        if let Some(len) = M::CONTENT_LENGTH {
+            write_i32(len, &mut self.buffer);
+            msg.write(&mut self.buffer)
+        } else {
+            let len = self.buffer.len();
+            self.buffer.extend([0; 4]);
+            msg.write(&mut self.buffer)?;
+            let size = (self.buffer.len() - len) as i32;
+            self.buffer[len..len + 4].copy_from_slice(&size.to_be_bytes());
+            Ok(())
+        }
+    }
+
     pub async fn connect(config: &Config) -> Result<Self> {
         Ok(Self {
             transport: T::connect(config).await?,
@@ -90,15 +116,6 @@ impl<T: Transport> Connection<T> {
         write_params: impl Fn(&mut Vec<u8>) -> Result<()>,
     ) -> impl Stream<Item = Result<Row<'a>>> + Unpin {
         futures::stream::empty()
-    }
-
-    async fn recycle(&mut self) {
-        if self
-            .max_buffer_capacity
-            .is_some_and(|max| self.buffer.capacity() > max)
-        {
-            self.buffer = Vec::new();
-        }
     }
 }
 

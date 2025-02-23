@@ -151,12 +151,13 @@ impl Message for StartupMessage<'_> {}
 
 impl FrontendMessage for StartupMessage<'_> {
     fn write(&self, dst: &mut Vec<u8>) -> Result<()> {
-        write_i32(PROTOCOL_VERSION, dst)?;
-        write_cstr("user", dst)?;
-        write_cstr(self.user, dst)?;
-        write_cstr("database", dst)?;
-        write_cstr(self.database, dst)?;
-        write_u8(0, dst)
+        write_i32(PROTOCOL_VERSION, dst);
+        write_cstr(c"user", dst);
+        write_str(self.user, dst)?;
+        write_cstr(c"database", dst);
+        write_str(self.database, dst)?;
+        write_u8(0, dst);
+        Ok(())
     }
 }
 
@@ -257,9 +258,9 @@ impl Message for Parse<'_> {
 
 impl FrontendMessage for Parse<'_> {
     fn write(&self, dst: &mut Vec<u8>) -> Result<()> {
-        write_cstr("", dst)?;
-        write_cstr(self.query, dst)?;
-        write_i16(0, dst)?;
+        write_cstr(c"", dst);
+        write_str(self.query, dst)?;
+        write_i16(0, dst);
         Ok(())
     }
 }
@@ -292,13 +293,13 @@ where
     F: Fn(&mut Vec<u8>) -> Result<()>,
 {
     fn write(&self, dst: &mut Vec<u8>) -> Result<()> {
-        write_cstr("", dst)?;
-        write_cstr("", dst)?;
-        write_i16(1, dst)?;
-        write_i16(1, dst)?;
+        write_cstr(c"", dst);
+        write_cstr(c"", dst);
+        write_i16(1, dst);
+        write_i16(1, dst);
         (self.write_params)(dst)?;
-        write_i16(1, dst)?;
-        write_i16(1, dst)?;
+        write_i16(1, dst);
+        write_i16(1, dst);
         Ok(())
     }
 }
@@ -327,8 +328,8 @@ impl Message for Execute {
 
 impl FrontendMessage for Execute {
     fn write(&self, dst: &mut Vec<u8>) -> Result<()> {
-        write_cstr("", dst)?;
-        write_i32(0, dst)?;
+        write_cstr(c"", dst);
+        write_i32(0, dst);
         Ok(())
     }
 }

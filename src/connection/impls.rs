@@ -1,8 +1,6 @@
 use std::io::{Read, Result, Write};
 use std::net::TcpStream;
 
-use futures::FutureExt;
-
 use super::{Config, SyncTransport, TransportSend};
 
 impl TransportSend for TcpStream {
@@ -88,6 +86,7 @@ impl<T: TransportSend + SyncTransport + 'static> r2d2::ManageConnection
     type Error = std::io::Error;
 
     fn connect(&self) -> Result<Self::Connection> {
+        use futures::FutureExt;
         super::Connection::connect(&self.config)
             .now_or_never()
             .expect("transport marked as sync should not use awaits")
