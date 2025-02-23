@@ -39,21 +39,28 @@ impl ExactSizeIterator for Row<'_> {
     }
 }
 
-#[allow(async_fn_in_trait)]
+#[trait_variant::make(TransportSend: Send)]
 pub trait Transport: Sized {
     async fn connect(config: &Config) -> Result<Self>;
-    
+
     async fn read_exact(&mut self, limit: i32, dst: &mut Vec<u8>) -> Result<()>;
 
     async fn write_all(&mut self, src: &[u8]) -> Result<()>;
 }
 
+/// Marker traits for [`Transport`] implementations that can be used in synchronous contexts.
+///
+/// By implementing this trait on `T`, the implementer asserts that the implementation of
+/// [`Transport`] on `T` does not use any `await`s. Failure to uphold this assertion
+/// may result in [`panic`]s when using a [`Connection`] with this `T` in a
+/// synchronous context.
 pub trait SyncTransport: Transport {}
 
 pub struct Config {
     pub user: String,
     pub dbname: String,
     pub host: String,
+    pub max_buffer_capacity: Option<usize>,
 }
 
 pub struct Connection<T> {
@@ -69,16 +76,20 @@ impl<T: Transport> Connection<T> {
         })
     }
 
-    pub async fn query<'a>(&mut self, statement: &str, params: ()) -> impl Stream<Item = Row<'a>> {
+    pub async fn query<'a>(
+        &'a mut self,
+        statement: &str,
+        write_params: impl Fn(&mut Vec<u8>) -> Result<()>,
+    ) -> impl Stream<Item = Row<'a>> {
         futures::stream::empty()
     }
 }
 
-impl Transport for TcpStream {
+impl TransportSend for TcpStream {
     async fn connect(config: &Config) -> Result<Self> {
         Self::connect(&config.host)
     }
-    
+
     async fn read_exact(&mut self, limit: i32, dst: &mut Vec<u8>) -> Result<()> {
         Read::take(self, limit as u64).read_to_end(dst).map(drop)
     }
@@ -90,27 +101,55 @@ impl Transport for TcpStream {
 
 impl SyncTransport for TcpStream {}
 
-// #[cfg(feature = "deadpool")]
-// impl deadpool::managed::Manager for AsyncConnectionManager {
-//     type Type = AsyncConnection;
+#[cfg(feature = "tokio")]
+impl TransportSend for tokio::net::TcpStream {
+    async fn connect(config: &Config) -> Result<Self> {
+        Self::connect(&config.host).await
+    }
 
-//     type Error = AsyncConnectionManagerError;
+    async fn read_exact(&mut self, limit: i32, dst: &mut Vec<u8>) -> Result<()> {
+        use tokio::io::AsyncReadExt;
+        tokio::io::AsyncReadExt::take(self, limit as u64)
+            .read_to_end(dst)
+            .await
+            .map(drop)
+    }
 
-//     async fn create(&self) -> Result<Self::Type, Self::Error> {
-//         let (client, conn) =
-//             tokio_postgres::connect(&self.connection_url, tokio_postgres::NoTls).await?;
-//         tokspawn(conn);
-//         Ok(AsyncConnection {
-//             inner: client,
-//             rows: Vec::default(),
-//         })
-//     }
+    async fn write_all(&mut self, src: &[u8]) -> Result<()> {
+        use tokio::io::AsyncWriteExt;
+        AsyncWriteExt::write_all(self, src).await
+    }
+}
 
-//     async fn recycle(
-//         &self,
-//         _: &mut Self::Type,
-//         _: &deadpool::managed::Metrics,
-//     ) -> deadpool::managed::RecycleResult<Self::Error> {
-//         Ok(())
-//     }
-// }
+#[cfg(feature = "deadpool")]
+pub struct ConnectionManager<T> {
+    config: Config,
+    _marker: std::marker::PhantomData<fn(T)>,
+}
+
+#[cfg(feature = "deadpool")]
+impl<T: TransportSend> deadpool::managed::Manager for ConnectionManager<T> {
+    type Type = Connection<T>;
+
+    type Error = std::io::Error;
+
+    async fn create(&self) -> Result<Self::Type> {
+        Connection::connect(&self.config).await
+    }
+
+    async fn recycle(
+        &self,
+        conn: &mut Self::Type,
+        _: &deadpool::managed::Metrics,
+    ) -> deadpool::managed::RecycleResult<Self::Error> {
+        if self
+            .config
+            .max_buffer_capacity
+            .is_some_and(|max| conn.buf.capacity() > max)
+        {
+            conn.buf = Vec::new();
+        }
+        // TODO: reset transaction state and wait for ReadyForQuery
+        Ok(())
+    }
+}

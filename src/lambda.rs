@@ -9,7 +9,7 @@ use crate::types::FromQueryResult;
 
 pub struct PgLambda<F, R> {
     pub(crate) statement: &'static str,
-    pub(crate) args: F,
+    pub(crate) write_params: F,
     pub(crate) _marker: PhantomData<R>,
 }
 
@@ -20,17 +20,17 @@ where
     pub async fn call_async<'a, T: FromQueryResult<'a, R>>(
         self,
         conn: &'a mut Connection<impl Transport>,
-    ) -> Result<T> {
+    ) -> Result<T::Output> {
         todo!()
     }
 
     pub fn call<'a, T: FromQueryResult<'a, R>>(
         self,
         conn: &'a mut Connection<impl SyncTransport>,
-    ) -> Result<T> {
-        self.call_async(conn)
+    ) -> Result<T::Output> {
+        self.call_async::<T>(conn)
             .now_or_never()
-            .expect("transport was not async")
+            .expect("transport marked as sync should not use awaits")
     }
 }
 

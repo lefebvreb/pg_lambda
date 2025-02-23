@@ -1,4 +1,4 @@
-use pg_lambda::schema::{Schema, Table};
+use pg_lambda::schema::Table;
 use pg_lambda::types::{Integer, Text};
 
 #[derive(Table)]
@@ -36,7 +36,4 @@ pub struct Permission {
 }
 
 #[test]
-fn schema() {
-    let s = serde_json::to_string_pretty(Schema::get()).unwrap();
-    std::fs::write(".vscode/schema.json", s).unwrap();
-}
+fn schema() {}

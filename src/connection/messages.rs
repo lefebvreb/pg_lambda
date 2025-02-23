@@ -170,14 +170,13 @@ impl Message for AuthenticationOk {
 
 impl<'a> BackendMessage<'a> for AuthenticationOk {
     fn read(src: &mut &'a [u8]) -> Result<Self> {
-        Ok(match read_i32(src)? {
-            0 => Self,
-            n => {
-                return Err(Error::other(format!(
-                    "unknown authentication message type: {n}"
-                )))
-            }
-        })
+        match read_i32(src)? {
+            0 => Ok(Self),
+            n => Err(Error::new(
+                ErrorKind::Unsupported,
+                format!("unsupported authentication type, code: {n}"),
+            )),
+        }
     }
 }
 

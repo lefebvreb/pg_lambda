@@ -25,10 +25,10 @@ pub struct PgLambdaDef {
 
 inventory::collect!(PgLambdaDef);
 
-pub fn new_lambda<F, R>(statement: &'static str, args: F) -> PgLambda<F, R> {
+pub fn new_lambda<F, R>(statement: &'static str, write_params: F) -> PgLambda<F, R> {
     PgLambda {
         statement,
-        args,
+        write_params,
         _marker: std::marker::PhantomData,
     }
 }
