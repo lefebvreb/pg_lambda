@@ -1,4 +1,5 @@
 use std::io::{Error, ErrorKind, Read, Result, Write};
+use std::marker::PhantomData;
 use std::str;
 
 use futures::{Stream, StreamExt};
@@ -93,7 +94,7 @@ pub trait FromQueryResult<'a, T>: Sized {
     #[allow(async_fn_in_trait)]
     async fn from_rows<S>(rows: S) -> Result<Self::Output>
     where
-        S: Stream<Item = Row<'a>> + Unpin;
+        S: Stream<Item = Result<Row<'a>>> + Unpin;
 
     /// Assumes all [`Future`](std::future::Future)s resolve immediately and produces an output that can be consumed in a sync context.
     fn unsyncify(output: Self::Output) -> Self::SyncOutput;
@@ -103,13 +104,19 @@ impl<'a> FromQueryResult<'a, ()> for () {
     type Output = Self;
 
     type SyncOutput = Self::Output;
-    
+
     async fn from_rows<S>(mut rows: S) -> Result<Self::Output>
     where
-        S: Stream<Item = Row<'a>> + Unpin,
+        S: Stream<Item = Result<Row<'a>>> + Unpin,
     {
         match rows.next().await {
-            Some(_) => Err(Error::new(ErrorKind::InvalidData, "unexpected non-empty query result")),
+            Some(res) => {
+                res?;
+                Err(Error::new(
+                    ErrorKind::InvalidData,
+                    "unexpected non-empty query result",
+                ))
+            }
             None => Ok(()),
         }
     }
@@ -120,36 +127,54 @@ impl<'a> FromQueryResult<'a, ()> for () {
 }
 
 impl<'a, T: PgType, U: FromPgValue<'a, T>> FromQueryResult<'a, T> for U {
-    // fn from_row(mut row: Row<'a>) -> Result<Self> {
-    //     let column = row
-    //         .next()
-    //         .ok_or_else(|| Error::new(ErrorKind::InvalidData, "unexpected empty row"))??;
-    //     match column {
-    //         Some(mut bytes) => U::read(&mut bytes),
-    //         None => U::null(),
-    //     }
-    // }
     type Output = Self;
-    
+
     type SyncOutput = Self::Output;
-    
-    async fn from_rows<S>(rows: S) -> Result<Self::Output>
+
+    async fn from_rows<S>(mut rows: S) -> Result<Self::Output>
     where
-        S: Stream<Item = Row<'a>> + Unpin,
+        S: Stream<Item = Result<Row<'a>>> + Unpin,
     {
-        todo!()
+        match rows.next().await {
+            Some(res) => {
+                let column = res?
+                    .next()
+                    .ok_or_else(|| Error::new(ErrorKind::InvalidData, "unexpected empty row"))??;
+                match column {
+                    Some(mut bytes) => U::read(&mut bytes),
+                    None => U::null(),
+                }
+            }
+            None => Err(Error::new(
+                ErrorKind::UnexpectedEof,
+                "unexpected empty query result",
+            )),
+        }
     }
-    
+
     fn unsyncify(output: Self::Output) -> Self::SyncOutput {
         output
     }
 }
 
-// impl<'a, T0: PgType, U0: FromPgValue<'a, T0>> FromQueryResult<'a, (T0,)> for Vec<(U0,)> {
-//     fn from_row(row: Row<'a>) -> Result<Self> {
-//         todo!()
-//     }
-// }
+pub struct AnonymousTable<T>(PhantomData<T>);
+
+impl<'a, T0: PgType, U0: FromPgValue<'a, T0>> FromQueryResult<'a, AnonymousTable<(T0,)>> for (U0,) {
+    type Output = ();
+
+    type SyncOutput = ();
+
+    async fn from_rows<S>(rows: S) -> Result<Self::Output>
+    where
+        S: Stream<Item = Result<Row<'a>>> + Unpin,
+    {
+        todo!()
+    }
+
+    fn unsyncify(output: Self::Output) -> Self::SyncOutput {
+        todo!()
+    }
+}
 
 // impl<'a, T0: PgType, T1: PgType, U0: FromPgValue<'a, T0>, U1: FromPgValue<'a, T1>>
 //     FromQueryResult<'a, (T0, T1)> for Vec<(U0, U1)>

@@ -1,10 +1,13 @@
-use std::io::{Read, Result, Write};
-use std::net::TcpStream;
+use std::io::Result;
+use std::iter::FusedIterator;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
 use futures::Stream;
 use messages::DataRow;
 use util::{read_i32, read_slice};
 
+mod impls;
 mod messages;
 mod util;
 
@@ -39,8 +42,11 @@ impl ExactSizeIterator for Row<'_> {
     }
 }
 
+impl FusedIterator for Row<'_> {}
+
 #[trait_variant::make(TransportSend: Send)]
 pub trait Transport: Sized {
+    // todo: find a way to test multiple addresses
     async fn connect(config: &Config) -> Result<Self>;
 
     async fn read_exact(&mut self, limit: i32, dst: &mut Vec<u8>) -> Result<()>;
@@ -48,7 +54,7 @@ pub trait Transport: Sized {
     async fn write_all(&mut self, src: &[u8]) -> Result<()>;
 }
 
-/// Marker traits for [`Transport`] implementations that can be used in synchronous contexts.
+/// Marker trait for [`Transport`] implementations that can be used in synchronous contexts.
 ///
 /// By implementing this trait on `T`, the implementer asserts that the implementation of
 /// [`Transport`] on `T` does not use any `await`s. Failure to uphold this assertion
@@ -65,91 +71,51 @@ pub struct Config {
 
 pub struct Connection<T> {
     transport: T,
-    buf: Vec<u8>,
+    buffer: Vec<u8>,
+    max_buffer_capacity: Option<usize>,
 }
 
 impl<T: Transport> Connection<T> {
     pub async fn connect(config: &Config) -> Result<Self> {
         Ok(Self {
             transport: T::connect(config).await?,
-            buf: Vec::new(),
+            buffer: Vec::new(),
+            max_buffer_capacity: config.max_buffer_capacity,
         })
     }
 
-    pub async fn query<'a>(
+    pub async fn extended_query<'a>(
         &'a mut self,
         statement: &str,
         write_params: impl Fn(&mut Vec<u8>) -> Result<()>,
-    ) -> impl Stream<Item = Row<'a>> {
+    ) -> impl Stream<Item = Result<Row<'a>>> + Unpin {
         futures::stream::empty()
     }
-}
 
-impl TransportSend for TcpStream {
-    async fn connect(config: &Config) -> Result<Self> {
-        Self::connect(&config.host)
-    }
-
-    async fn read_exact(&mut self, limit: i32, dst: &mut Vec<u8>) -> Result<()> {
-        Read::take(self, limit as u64).read_to_end(dst).map(drop)
-    }
-
-    async fn write_all(&mut self, src: &[u8]) -> Result<()> {
-        Write::write_all(self, src)
+    async fn recycle(&mut self) {
+        if self
+            .max_buffer_capacity
+            .is_some_and(|max| self.buffer.capacity() > max)
+        {
+            self.buffer = Vec::new();
+        }
     }
 }
 
-impl SyncTransport for TcpStream {}
-
-#[cfg(feature = "tokio")]
-impl TransportSend for tokio::net::TcpStream {
-    async fn connect(config: &Config) -> Result<Self> {
-        Self::connect(&config.host).await
-    }
-
-    async fn read_exact(&mut self, limit: i32, dst: &mut Vec<u8>) -> Result<()> {
-        use tokio::io::AsyncReadExt;
-        tokio::io::AsyncReadExt::take(self, limit as u64)
-            .read_to_end(dst)
-            .await
-            .map(drop)
-    }
-
-    async fn write_all(&mut self, src: &[u8]) -> Result<()> {
-        use tokio::io::AsyncWriteExt;
-        AsyncWriteExt::write_all(self, src).await
-    }
-}
-
-#[cfg(feature = "deadpool")]
+#[cfg(any(feature = "bb8", feature = "deadpool", feature = "r2d2"))]
 pub struct ConnectionManager<T> {
     config: Config,
     _marker: std::marker::PhantomData<fn(T)>,
 }
 
-#[cfg(feature = "deadpool")]
-impl<T: TransportSend> deadpool::managed::Manager for ConnectionManager<T> {
-    type Type = Connection<T>;
+pub struct ExtendedQuery<'a, T> {
+    conn: &'a mut Connection<T>,
+}
 
-    type Error = std::io::Error;
+impl<'a, T> Stream for ExtendedQuery<'a, T> {
+    type Item = Result<Row<'a>>;
 
-    async fn create(&self) -> Result<Self::Type> {
-        Connection::connect(&self.config).await
-    }
-
-    async fn recycle(
-        &self,
-        conn: &mut Self::Type,
-        _: &deadpool::managed::Metrics,
-    ) -> deadpool::managed::RecycleResult<Self::Error> {
-        if self
-            .config
-            .max_buffer_capacity
-            .is_some_and(|max| conn.buf.capacity() > max)
-        {
-            conn.buf = Vec::new();
-        }
-        // TODO: reset transaction state and wait for ReadyForQuery
-        Ok(())
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        todo!()
     }
 }

@@ -17,41 +17,20 @@ impl<F, R> PgLambda<F, R>
 where
     F: Fn(&mut Vec<u8>) -> Result<()>,
 {
-    pub async fn call_async<'a, T: FromQueryResult<'a, R>>(
+    pub async fn call<'a, T: FromQueryResult<'a, R>>(
         self,
         conn: &'a mut Connection<impl Transport>,
     ) -> Result<T::Output> {
-        todo!()
+        let rows = conn.extended_query(self.statement, self.write_params).await;
+        T::from_rows(rows).await
     }
 
-    pub fn call<'a, T: FromQueryResult<'a, R>>(
+    pub fn call_sync<'a, T: FromQueryResult<'a, R>>(
         self,
         conn: &'a mut Connection<impl SyncTransport>,
     ) -> Result<T::Output> {
-        self.call_async::<T>(conn)
+        self.call::<T>(conn)
             .now_or_never()
             .expect("transport marked as sync should not use awaits")
     }
 }
-
-// pub struct PgLambda<'a, T> {
-//     pub(crate) statement: &'static str,
-//     // in the future: ptr + fn(ptr, &mut Vec<u8>)
-//     // pub(crate) params: Box<[&'a (dyn ToSql + Sync)]>,
-//     pub(crate) _marker: PhantomData<&'a T>,
-// }
-
-// impl<T: PgType> PgLambda<'_, T> {
-//     pub async fn call_async<'a, U: FromQueryResult<'a, T>>(
-//         self,
-//         conn: &'a mut SyncConnection,
-//     ) -> Result<U> {
-//         // conn.rows = conn
-//         //     .inner
-//         //     .query(self.statement, &self.params)
-//         //     .await
-//         //     .map_err(PgLambdaError::Protocol)?;
-//         // U::from_rows(&conn.rows)
-//         todo!()
-//     }
-// }

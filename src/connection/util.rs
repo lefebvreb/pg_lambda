@@ -52,7 +52,3 @@ pub fn read_slice<'a>(len: i32, src: &mut &'a [u8]) -> Result<&'a [u8]> {
     *src = tail;
     Ok(slice)
 }
-
-pub fn write_slice(val: &[u8], dst: &mut Vec<u8>) -> Result<()> {
-    dst.write_all(val)
-}

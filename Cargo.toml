@@ -13,13 +13,17 @@ edition.workspace = true
 [features]
 deadpool = ["dep:deadpool"]
 tokio = ["dep:tokio"]
+bb8 = ["dep:bb8"]
+r2d2 = ["dep:r2d2"]
 
 [dependencies]
+bb8 = { version = "0.9.0", default-features = false, optional = true }
 constcat = { version = "0.6.0", default-features = false }
 deadpool = { version = "0.12.2", default-features = false, optional = true, features = ["managed"] }
 futures = { version = "0.3.31", default-features = false }
 inventory = { version = "0.3.19", default-features = false }
 lazy_static = { version = "1.5.0", default-features = false }
+r2d2 = { version = "0.8.10", default-features = false, optional = true }
 serde = { version = "1.0.217", default-features = false, features = ["derive", "std"] }
 thiserror = { version = "2.0.11", default-features = false, features = ["std"] }
 tokio = { version = "1.43.0", default-features = false, optional = true, features = ["io-util", "net"] }
