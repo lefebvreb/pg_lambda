@@ -1,5 +1,6 @@
 use std::io::{Error, ErrorKind, Read, Result, Write};
 use std::marker::PhantomData;
+use std::pin::pin;
 use std::str;
 
 use futures::{Stream, StreamExt};
@@ -86,6 +87,7 @@ impl<'a> FromPgValue<'a, Text> for String {
 //     const SQL_NAME: &str = "???";
 // }
 
+// See: https://github.com/rust-lang/rust/issues/87479
 pub trait FromQueryResult<'a, T>: Sized {
     type Output;
 
@@ -94,7 +96,7 @@ pub trait FromQueryResult<'a, T>: Sized {
     #[allow(async_fn_in_trait)]
     async fn from_rows<S>(rows: S) -> Result<Self::Output>
     where
-        S: Stream<Item = Result<Row<'a>>> + Unpin;
+        S: Stream<Item = Result<Row<'a>>>;
 
     /// Assumes all [`Future`](std::future::Future)s resolve immediately and produces an output that can be consumed in a sync context.
     fn unsyncify(output: Self::Output) -> Self::SyncOutput;
@@ -107,9 +109,9 @@ impl<'a> FromQueryResult<'a, ()> for () {
 
     async fn from_rows<S>(mut rows: S) -> Result<Self::Output>
     where
-        S: Stream<Item = Result<Row<'a>>> + Unpin,
+        S: Stream<Item = Result<Row<'a>>>,
     {
-        match rows.next().await {
+        match pin!(rows).next().await {
             Some(res) => {
                 res?;
                 Err(Error::new(
@@ -133,9 +135,9 @@ impl<'a, T: PgType, U: FromPgValue<'a, T>> FromQueryResult<'a, T> for U {
 
     async fn from_rows<S>(mut rows: S) -> Result<Self::Output>
     where
-        S: Stream<Item = Result<Row<'a>>> + Unpin,
+        S: Stream<Item = Result<Row<'a>>>,
     {
-        match rows.next().await {
+        match pin!(rows).next().await {
             Some(res) => {
                 let column = res?
                     .next()
@@ -166,7 +168,7 @@ impl<'a, T0: PgType, U0: FromPgValue<'a, T0>> FromQueryResult<'a, AnonymousTable
 
     async fn from_rows<S>(rows: S) -> Result<Self::Output>
     where
-        S: Stream<Item = Result<Row<'a>>> + Unpin,
+        S: Stream<Item = Result<Row<'a>>>,
     {
         todo!()
     }
@@ -174,4 +176,8 @@ impl<'a, T0: PgType, U0: FromPgValue<'a, T0>> FromQueryResult<'a, AnonymousTable
     fn unsyncify(output: Self::Output) -> Self::SyncOutput {
         todo!()
     }
+}
+
+trait X<'a> {
+    type Gat<Y>;
 }

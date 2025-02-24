@@ -2,6 +2,8 @@ use std::ffi::CStr;
 use std::io::{Error, ErrorKind, Read, Result};
 use std::slice;
 
+use super::messages::{ErrorResponse, NegotiateProtocolVersion};
+
 pub fn read_u8(src: &mut &[u8]) -> Result<u8> {
     let mut byte = 0;
     src.read_exact(slice::from_mut(&mut byte))?;
@@ -63,4 +65,33 @@ pub fn write_str(val: &str, dst: &mut Vec<u8>) -> Result<()> {
     dst.extend(val.as_bytes());
     write_u8(b'\0', dst);
     Ok(())
+}
+
+impl From<ErrorResponse<'_>> for Error {
+    fn from(msg: ErrorResponse) -> Self {
+        Error::new(
+            ErrorKind::InvalidData,
+            format!("postgresql error: {:?}", msg.fields),
+        )
+    }
+}
+
+impl From<NegotiateProtocolVersion<'_>> for Error {
+    fn from(msg: NegotiateProtocolVersion) -> Self {
+        Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "unsupported protocol version, newest minor protocol supported version is {}, the following options are unsupported: {}", 
+                msg.min_supported,
+                msg.unsupported.into_iter().flat_map(CStr::to_str).collect::<Vec<_>>().join(", "),
+            ),
+        )
+    }
+}
+
+pub fn unexpected_message_prefix(n: u8) -> Error {
+    Error::new(
+        ErrorKind::InvalidData,
+        format!("unknown backend message byte: 0x{n:x}"),
+    )
 }
