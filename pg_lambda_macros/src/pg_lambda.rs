@@ -56,8 +56,7 @@ struct Lambda {
     vis: Visibility,
     fn_token: Token![fn],
     ident: Ident,
-    #[allow(dead_code)]
-    paren_token: Paren,
+    _paren_token: Paren,
     inputs: Punctuated<LambdaArg, Token![,]>,
     output: ReturnType,
     block: LitStr,
@@ -71,7 +70,7 @@ impl Parse for Lambda {
             vis: input.parse()?,
             fn_token: input.parse()?,
             ident: input.parse()?,
-            paren_token: parenthesized!(content in input),
+            _paren_token: parenthesized!(content in input),
             inputs: Punctuated::parse_terminated(&content)?,
             output: input.parse()?,
             block: input.parse()?,
