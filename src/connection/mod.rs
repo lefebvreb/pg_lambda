@@ -1,12 +1,11 @@
-use std::convert::identity;
-use std::io::{Error, Result};
+use std::io::Result;
 use std::iter::FusedIterator;
 use std::mem::transmute;
 
 use messages::{
     Authentication, BackendKeyData, BackendMessage, Bind, BindComplete, CommandComplete, DataRow,
     EmptyQueryResponse, ErrorResponse, Execute, FrontendMessage, NegotiateProtocolVersion,
-    NoticeResponse, ParameterStatus, Parse, ParseComplete, ReadyForQuery, StartupMessage,
+    NoticeResponse, ParameterStatus, Parse, ParseComplete, ReadyForQuery, StartupMessage, Sync,
 };
 use util::{read_i32, read_slice, unexpected_message_prefix, write_i32};
 
@@ -99,69 +98,50 @@ impl<T: Transport> BufferedTransport<T> {
         if let Some(byte) = M::PREFIX {
             self.stack.push(byte);
         }
-        let start = self.stack.len();
+
         if let Some(size) = M::SIZE {
             write_i32(size, &mut self.stack);
-            msg.write(&mut self.stack)
-                .inspect_err(|_| self.stack.truncate(start))?;
+            msg.write(&mut self.stack)?;
         } else {
+            let start = self.stack.len();
             self.stack.extend([0; 4]);
-            msg.write(&mut self.stack)
-                .inspect_err(|_| self.stack.truncate(start))?;
+            msg.write(&mut self.stack)?;
             let size = (self.stack.len() - start) as i32;
             self.stack[start..start + 4].copy_from_slice(&size.to_be_bytes());
         }
+
         Ok(())
     }
 
-    async fn send_multiple(&mut self, f: impl FnOnce(&mut Self) -> Result<()>) -> Result<()> {
-        let len = self.stack.len();
-        f(self).inspect_err(|_| self.stack.truncate(len))?;
-        let res = self.transport.write_all(&self.stack).await;
-        self.stack.truncate(len);
-        res
+    async fn send_all(&mut self) -> Result<()> {
+        self.transport.write_all(&self.stack).await
     }
 
     async fn receive_one(&mut self) -> Result<()> {
-        let start = self.stack.len();
+        self.stack.clear();
         self.transport.read_exact(5, &mut self.stack).await?;
-        let size = i32::from_be_bytes(self.stack[start + 1..start + 5].try_into().unwrap());
+        let size = i32::from_be_bytes(self.stack[1..5].try_into().unwrap());
         self.transport.read_exact(size, &mut self.stack).await?;
         Ok(())
     }
 
     async fn receive_unhandled(&mut self) -> Result<AnyMessage> {
         loop {
-            let start = self.stack.len();
-            self.receive_one()
-                .await
-                .inspect_err(|_| self.stack.truncate(start))?;
+            self.receive_one().await?;
+
             // todo: enhance error and warning reportings.
             match self.stack[0] {
                 ErrorResponse::PREFIX => {
-                    let err = AnyMessage(&self.stack[start..])
-                        .read::<ErrorResponse>()
-                        .map_or_else(identity, Error::from);
-                    self.stack.truncate(start);
-                    return Err(err);
+                    return Err(ErrorResponse::read(&mut self.stack.as_slice())?.into());
                 }
                 NegotiateProtocolVersion::PREFIX => {
-                    let err = AnyMessage(&self.stack[start..])
-                        .read::<NegotiateProtocolVersion>()
-                        .map_or_else(identity, Error::from);
-                    self.stack.truncate(start);
-                    return Err(err);
+                    return Err(NegotiateProtocolVersion::read(&mut self.stack.as_slice())?.into());
                 }
-                NoticeResponse::PREFIX | ParameterStatus::PREFIX => self.stack.truncate(start),
-                _ => return Ok(AnyMessage(&self.stack[start..])),
+                NoticeResponse::PREFIX | ParameterStatus::PREFIX => (),
+                _ => return Ok(AnyMessage(&self.stack)),
             }
         }
     }
-}
-
-enum QueryState {
-    Ready,
-    Underway,
 }
 
 enum TransactionState {
@@ -172,12 +152,29 @@ enum TransactionState {
 
 pub struct Connection<T> {
     transport: BufferedTransport<T>,
-    query_state: QueryState,
     transaction_state: TransactionState,
     _secret_key: i32,
 }
 
 impl<T: Transport> Connection<T> {
+    /// Waits for a ReadyForQuery
+    async fn sync(&mut self) -> Result<()> {
+        loop {
+            let msg = self.transport.receive_unhandled().await?;
+            match msg.prefix() {
+                ReadyForQuery::PREFIX => {
+                    self.transaction_state = match msg.read::<ReadyForQuery>()? {
+                        ReadyForQuery::Idle => TransactionState::None,
+                        ReadyForQuery::Transaction => TransactionState::Underway,
+                        ReadyForQuery::FailedTransaction => TransactionState::Failed,
+                    };
+                    return Ok(());
+                }
+                _ => (),
+            }
+        }
+    }
+
     pub async fn connect(config: &Config) -> Result<Self> {
         let mut transport = BufferedTransport {
             transport: T::connect(config).await?,
@@ -185,14 +182,11 @@ impl<T: Transport> Connection<T> {
         };
 
         // Send StartupMessage
-        transport
-            .send_multiple(|transport| {
-                transport.write_one(StartupMessage {
-                    user: &config.user,
-                    database: &config.database,
-                })
-            })
-            .await?;
+        transport.write_one(StartupMessage {
+            user: &config.user,
+            database: &config.database,
+        })?;
+        transport.send_all().await?;
 
         // Wait for Authenticate
         let msg = transport.receive_unhandled().await?;
@@ -202,7 +196,6 @@ impl<T: Transport> Connection<T> {
             },
             n => return Err(unexpected_message_prefix(n)),
         }
-        transport.clear();
 
         // Wait for BackendKeyData
         let msg = transport.receive_unhandled().await?;
@@ -213,65 +206,44 @@ impl<T: Transport> Connection<T> {
             }
             n => return Err(unexpected_message_prefix(n)),
         };
-        transport.clear();
-
-        // Wait for ReadyForQuery
-        let msg = transport.receive_unhandled().await?;
-        match msg.prefix() {
-            ReadyForQuery::PREFIX => (),
-            n => return Err(unexpected_message_prefix(n)),
-        }
-        transport.clear();
 
         Ok(Self {
             transport,
-            query_state: QueryState::Ready,
             transaction_state: TransactionState::None,
             _secret_key: secret_key,
         })
     }
 
-    pub async fn extended_query<'a>(
+    pub async fn query<'a>(
         &'a mut self,
         statement: &str,
         params: impl Fn(&mut Vec<u8>) -> Result<()>,
     ) -> Result<&'a mut RowsStream<T>> {
-        match self.query_state {
-            QueryState::Ready => (),
-            QueryState::Underway => todo!(),
-        }
-        self.query_state = QueryState::Underway;
+        self.sync().await?;
 
-        // Send Parse, Bind and Execute to start the query
-        self.transport
-            .send_multiple(|transport| {
-                transport.write_one(Parse { query: statement })?;
-                transport.write_one(Bind { params })?;
-                transport.write_one(Execute)
-            })
-            .await?;
+        // Send Parse, Bind, Execute and Sync to start the query
+        self.transport.clear();
+        self.transport.write_one(Parse { query: statement })?;
+        self.transport.write_one(Bind { params })?;
+        self.transport.write_one(Execute)?;
+        self.transport.write_one(Sync)?;
+        self.transport.send_all().await?;
 
-        // Wait for ParseComplete
+        // Waits for ParseComplete
         let msg = self.transport.receive_unhandled().await?;
         match msg.prefix() {
             ParseComplete::PREFIX => (),
             n => return Err(unexpected_message_prefix(n)),
         }
-        self.transport.clear();
 
-        // Wait for BindComplete
+        // Waits for BindComplete
         let msg = self.transport.receive_unhandled().await?;
         match msg.prefix() {
             BindComplete::PREFIX => (),
             n => return Err(unexpected_message_prefix(n)),
         }
-        self.transport.clear();
 
         Ok(RowsStream::new(self))
-    }
-
-    pub async fn sync(&mut self) -> Result<()> {
-        todo!()
     }
 }
 

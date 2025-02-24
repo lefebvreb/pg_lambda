@@ -2,7 +2,7 @@ use std::io::{Error, ErrorKind, Read, Result, Write};
 use std::marker::PhantomData;
 use std::str;
 
-use crate::connection::{RowsStream, Transport};
+use crate::connection::{Row, RowsStream, Transport};
 
 pub trait PgType {
     // Have a create type and a raw type
@@ -78,27 +78,55 @@ impl<'a> FromPgValue<'a, Text> for String {
     }
 }
 
-// pub struct Nullable<T>(PhantomData<T>);
+// pub struct Nullable<T: PgType>(PhantomData<T>);
 
 // impl<T: PgType> PgType for Nullable<T> {
 //     const SQL_NAME: &str = "???";
 // }
 
+pub trait FromRow<'a, R>: Sized {
+    fn from_row(row: Row<'a>) -> Result<Self>;
+}
+
+impl FromRow<'_, ()> for () {
+    fn from_row(mut row: Row<'_>) -> Result<Self> {
+        match row.next() {
+            Some(_) => Err(Error::new(
+                ErrorKind::InvalidData,
+                "unexpected an empty row",
+            )),
+            None => Ok(()),
+        }
+    }
+}
+
+// Tuple impls...
+
+impl<'a, R> FromRow<'a, R> for Row<'a> {
+    fn from_row(row: Row<'a>) -> Result<Self> {
+        Ok(row)
+    }
+}
+
+// Derive for custom types
+
 // See: https://github.com/rust-lang/rust/issues/87479
-pub trait FromQueryResult<'a, T>: Sized {
+pub trait FromQueryResult<'a, R>: Sized {
     type SyncOutput;
 
     #[allow(async_fn_in_trait)]
-    async fn from_rows(stream: &'a mut RowsStream<impl Transport>) -> Result<Self>;
+    async fn from_stream(stream: &'a mut RowsStream<impl Transport>) -> Result<Self>;
 
     /// Assumes all [`Future`](std::future::Future)s resolve immediately and produces an output that can be consumed in a sync context.
     fn syncify(self) -> Self::SyncOutput;
 }
 
-impl FromQueryResult<'_, ()> for () {
+pub struct Void;
+
+impl FromQueryResult<'_, Void> for () {
     type SyncOutput = Self;
 
-    async fn from_rows(stream: &mut RowsStream<impl Transport>) -> Result<Self> {
+    async fn from_stream(stream: &mut RowsStream<impl Transport>) -> Result<Self> {
         match stream.next().await? {
             Some(_) => Err(Error::new(
                 ErrorKind::InvalidData,
@@ -113,28 +141,15 @@ impl FromQueryResult<'_, ()> for () {
     }
 }
 
-impl<'a, T: PgType, U: FromPgValue<'a, T>> FromQueryResult<'a, T> for U {
+pub struct Single<R>(PhantomData<R>);
+
+impl<'a, R, T: FromRow<'a, R>> FromQueryResult<'a, Single<R>> for T {
     type SyncOutput = Self;
 
-    async fn from_rows(stream: &'a mut RowsStream<impl Transport>) -> Result<Self> {
+    async fn from_stream(stream: &'a mut RowsStream<impl Transport>) -> Result<Self> {
+        // todo: figure out a way to pull the first None that comes right after
         match stream.next().await? {
-            Some(mut row) => {
-                let column = row
-                    .next()
-                    .ok_or_else(|| Error::new(ErrorKind::InvalidData, "unexpected empty row"))??;
-
-                if row.next().is_some() {
-                    return Err(Error::new(
-                        ErrorKind::InvalidData,
-                        "unexpected second column in row",
-                    ));
-                }
-
-                match column {
-                    Some(mut bytes) => U::read(&mut bytes),
-                    None => U::null(),
-                }
-            }
+            Some(row) => T::from_row(row),
             None => Err(Error::new(
                 ErrorKind::UnexpectedEof,
                 "unexpected empty query result",
@@ -147,12 +162,12 @@ impl<'a, T: PgType, U: FromPgValue<'a, T>> FromQueryResult<'a, T> for U {
     }
 }
 
-pub struct AnonymousTable<T>(PhantomData<T>);
+pub struct SetOf<R>(PhantomData<R>);
 
-impl<'a, T0: PgType, U0: FromPgValue<'a, T0>> FromQueryResult<'a, AnonymousTable<(T0,)>> for Vec<(U0,)> {
+impl<'a, R, T: FromRow<'a, R>> FromQueryResult<'a, SetOf<R>> for T {
     type SyncOutput = Self;
 
-    async fn from_rows(stream: &'a mut RowsStream<impl Transport>) -> Result<Self> {
+    async fn from_stream(stream: &'a mut RowsStream<impl Transport>) -> Result<Self> {
         match stream.next().await? {
             Some(row) => todo!(),
             None => todo!(),
@@ -163,12 +178,3 @@ impl<'a, T0: PgType, U0: FromPgValue<'a, T0>> FromQueryResult<'a, AnonymousTable
         self
     }
 }
-
-// fn from_conn<'a>(conn: &'a mut Connection<impl Transport>) -> impl futures::Stream<Item = Result<&'a [u8]>> {
-//     futures::stream::try_unfold(conn, |conn| async {
-//         match conn.next_row().await? {
-//             Some(mut row) => Ok(Some((row.next().unwrap().unwrap().unwrap(), conn))),
-//             None => Ok(None),
-//         }
-//     })
-// }

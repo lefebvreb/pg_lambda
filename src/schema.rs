@@ -235,7 +235,7 @@ impl Schema {
         &SCHEMA
     }
 
-    fn diff(&self, other: &Self) -> Box<[SchemaOp]> {
-        todo!()
-    }
+    // fn diff(&self, other: &Self) -> Box<[SchemaOp]> {
+    //     todo!()
+    // }
 }
