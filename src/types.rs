@@ -141,7 +141,9 @@ impl<'a, T: PgType, U: FromPgValue<'a, T>> FromQueryResult<'a, T> for U {
 
 pub struct AnonymousTable<T>(PhantomData<T>);
 
-impl<'a, T0: PgType, U0: FromPgValue<'a, T0>> FromQueryResult<'a, AnonymousTable<(T0,)>> for Vec<(U0,)> {
+impl<'a, T0: PgType, U0: FromPgValue<'a, T0>> FromQueryResult<'a, AnonymousTable<(T0,)>>
+    for Vec<(U0,)>
+{
     type SyncOutput = Self;
 
     async fn from_conn(conn: &'a mut Connection<impl Transport>) -> Result<Self> {

@@ -379,7 +379,7 @@ impl<'a> BackendMessage<'a> for CommandComplete<'a> {
 /// https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-DATAROW
 pub struct DataRow<'a> {
     pub len: i16,
-    pub bytes: &'a [u8],
+    pub columns: &'a [u8],
 }
 
 impl Message for DataRow<'_> {}
@@ -389,8 +389,8 @@ impl<'a> BackendMessage<'a> for DataRow<'a> {
 
     fn read(src: &mut &'a [u8]) -> Result<Self> {
         let len = read_i16(src)?;
-        let bytes = read_slice(len as i32, src)?;
-        Ok(Self { len, bytes })
+        let columns = read_slice(len as i32, src)?;
+        Ok(Self { len, columns })
     }
 }
 
