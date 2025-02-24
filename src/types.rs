@@ -122,6 +122,14 @@ impl<'a, T: PgType, U: FromPgValue<'a, T>> FromQueryResult<'a, T> for U {
                 let column = row
                     .next()
                     .ok_or_else(|| Error::new(ErrorKind::InvalidData, "unexpected empty row"))??;
+
+                if row.next().is_some() {
+                    return Err(Error::new(
+                        ErrorKind::InvalidData,
+                        "unexpected second column in row",
+                    ));
+                }
+
                 match column {
                     Some(mut bytes) => U::read(&mut bytes),
                     None => U::null(),
@@ -141,14 +149,12 @@ impl<'a, T: PgType, U: FromPgValue<'a, T>> FromQueryResult<'a, T> for U {
 
 pub struct AnonymousTable<T>(PhantomData<T>);
 
-impl<'a, T0: PgType, U0: FromPgValue<'a, T0>> FromQueryResult<'a, AnonymousTable<(T0,)>>
-    for Vec<(U0,)>
-{
+impl<'a, T0: PgType, U0: FromPgValue<'a, T0>> FromQueryResult<'a, AnonymousTable<(T0,)>> for Vec<(U0,)> {
     type SyncOutput = Self;
 
     async fn from_rows(stream: &'a mut RowsStream<impl Transport>) -> Result<Self> {
         match stream.next().await? {
-            Some(_) => todo!(),
+            Some(row) => todo!(),
             None => todo!(),
         }
     }

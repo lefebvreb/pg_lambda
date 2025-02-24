@@ -159,8 +159,21 @@ impl<T: Transport> BufferedTransport<T> {
     }
 }
 
+enum QueryState {
+    Ready,
+    Underway,
+}
+
+enum TransactionState {
+    None,
+    Underway,
+    Failed,
+}
+
 pub struct Connection<T> {
     transport: BufferedTransport<T>,
+    query_state: QueryState,
+    transaction_state: TransactionState,
     _secret_key: i32,
 }
 
@@ -212,6 +225,8 @@ impl<T: Transport> Connection<T> {
 
         Ok(Self {
             transport,
+            query_state: QueryState::Ready,
+            transaction_state: TransactionState::None,
             _secret_key: secret_key,
         })
     }
@@ -221,6 +236,12 @@ impl<T: Transport> Connection<T> {
         statement: &str,
         params: impl Fn(&mut Vec<u8>) -> Result<()>,
     ) -> Result<&'a mut RowsStream<T>> {
+        match self.query_state {
+            QueryState::Ready => (),
+            QueryState::Underway => todo!(),
+        }
+        self.query_state = QueryState::Underway;
+
         // Send Parse, Bind and Execute to start the query
         self.transport
             .send_multiple(|transport| {
@@ -247,6 +268,10 @@ impl<T: Transport> Connection<T> {
         self.transport.clear();
 
         Ok(RowsStream::new(self))
+    }
+
+    pub async fn sync(&mut self) -> Result<()> {
+        todo!()
     }
 }
 
