@@ -21,9 +21,9 @@ where
         self,
         conn: &'a mut Connection<impl Transport>,
     ) -> Result<T> {
-        conn.extended_query(self.statement, self.write_params)
+        let stream = conn.extended_query(self.statement, self.write_params)
             .await?;
-        T::from_conn(conn).await
+        T::from_rows(stream).await
     }
 
     pub fn call_sync<'a, T: FromQueryResult<'a, R>>(

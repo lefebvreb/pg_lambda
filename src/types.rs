@@ -2,7 +2,7 @@ use std::io::{Error, ErrorKind, Read, Result, Write};
 use std::marker::PhantomData;
 use std::str;
 
-use crate::connection::{Connection, Transport};
+use crate::connection::{Connection, RowsStream, Transport};
 
 pub trait PgType {
     // Have a create type and a raw type
@@ -89,7 +89,7 @@ pub trait FromQueryResult<'a, T>: Sized {
     type SyncOutput;
 
     #[allow(async_fn_in_trait)]
-    async fn from_conn(conn: &'a mut Connection<impl Transport>) -> Result<Self>;
+    async fn from_rows(stream: &'a mut RowsStream<impl Transport>) -> Result<Self>;
 
     /// Assumes all [`Future`](std::future::Future)s resolve immediately and produces an output that can be consumed in a sync context.
     fn syncify(self) -> Self::SyncOutput;
@@ -98,8 +98,8 @@ pub trait FromQueryResult<'a, T>: Sized {
 impl FromQueryResult<'_, ()> for () {
     type SyncOutput = Self;
 
-    async fn from_conn(conn: &mut Connection<impl Transport>) -> Result<Self> {
-        match conn.next_row().await? {
+    async fn from_rows(stream: &mut RowsStream<impl Transport>) -> Result<Self> {
+        match stream.next().await? {
             Some(_) => Err(Error::new(
                 ErrorKind::InvalidData,
                 "unexpected non-empty query result",
@@ -116,8 +116,8 @@ impl FromQueryResult<'_, ()> for () {
 impl<'a, T: PgType, U: FromPgValue<'a, T>> FromQueryResult<'a, T> for U {
     type SyncOutput = Self;
 
-    async fn from_conn(conn: &'a mut Connection<impl Transport>) -> Result<Self> {
-        match conn.next_row().await? {
+    async fn from_rows(stream: &'a mut RowsStream<impl Transport>) -> Result<Self> {
+        match stream.next().await? {
             Some(mut row) => {
                 let column = row
                     .next()
@@ -146,8 +146,8 @@ impl<'a, T0: PgType, U0: FromPgValue<'a, T0>> FromQueryResult<'a, AnonymousTable
 {
     type SyncOutput = Self;
 
-    async fn from_conn(conn: &'a mut Connection<impl Transport>) -> Result<Self> {
-        match conn.next_row().await? {
+    async fn from_rows(stream: &'a mut RowsStream<impl Transport>) -> Result<Self> {
+        match stream.next().await? {
             Some(_) => todo!(),
             None => todo!(),
         }

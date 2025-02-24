@@ -1,6 +1,7 @@
 use std::convert::identity;
 use std::io::{Error, Result};
 use std::iter::FusedIterator;
+use std::mem::transmute;
 
 use messages::{
     Authentication, BackendKeyData, BackendMessage, Bind, BindComplete, CommandComplete, DataRow,
@@ -220,16 +221,16 @@ impl<T: Transport> Connection<T> {
         })
     }
 
-    pub(crate) async fn extended_query(
-        &mut self,
+    pub async fn extended_query<'a>(
+        &'a mut self,
         statement: &str,
-        write_params: impl Fn(&mut Vec<u8>) -> Result<()>,
-    ) -> Result<()> {
+        params: impl Fn(&mut Vec<u8>) -> Result<()>,
+    ) -> Result<&'a mut RowsStream<T>> {
         // Send Parse, Bind and Execute to start the query
         self.transport
             .send_multiple(|transport| {
                 transport.write_one(Parse { query: statement })?;
-                transport.write_one(Bind { write_params })?;
+                transport.write_one(Bind { params })?;
                 transport.write_one(Execute)
             })
             .await?;
@@ -250,11 +251,33 @@ impl<T: Transport> Connection<T> {
         }
         self.transport.clear();
 
-        Ok(())
+        Ok(RowsStream::new(self))
+    }
+}
+
+/// A stream of rows produced as a result of a query.
+/// 
+/// # Why is this not a regular [`Stream`](futures::stream::Stream)?
+/// 
+/// Rows returned by [`RowsStream`] hold a reference to the buffer that
+/// is inside the underlying [`Connection`]. This pattern in rust is
+/// called a "lending iterator", or "streaming interator" and is not
+/// well supported by the Rust ecosystem.
+#[repr(transparent)]
+pub struct RowsStream<T>(Connection<T>);
+
+impl<T: Transport> RowsStream<T> {
+    fn new(conn: &mut Connection<T>) -> &mut Self {
+        // SAFETY: `RowsStream<T>` is a `transparent` wrapper of `Connection<T>`,
+        // it is therefore safe to transmute a mutable reference of one into a
+        // mutable reference of the other.
+        unsafe {
+            transmute(conn)
+        }
     }
 
-    pub(crate) async fn next_row(&mut self) -> Result<Option<Row>> {
-        let msg = self.transport.receive_unhandled().await?;
+    pub async fn next<'a>(&'a mut self) -> Result<Option<Row<'a>>> {
+        let msg = self.0.transport.receive_unhandled().await?;
         match msg.prefix() {
             CommandComplete::PREFIX | EmptyQueryResponse::PREFIX => Ok(None),
             DataRow::PREFIX => Ok(Some(Row { inner: msg.read()? })),
@@ -267,17 +290,4 @@ impl<T: Transport> Connection<T> {
 pub struct ConnectionManager<T> {
     config: Config,
     _marker: std::marker::PhantomData<fn(T)>,
-}
-
-pub struct RowsStream<'a, T>(&'a mut Connection<T>);
-
-impl<T: Transport> RowsStream<'_, T> {
-    pub async fn next<'a>(&'a mut self) -> Result<Option<Row<'a>>> {
-        let msg = self.0.transport.receive_unhandled().await?;
-        match msg.prefix() {
-            CommandComplete::PREFIX | EmptyQueryResponse::PREFIX => Ok(None),
-            DataRow::PREFIX => Ok(Some(Row { inner: msg.read()? })),
-            n => Err(unexpected_message_prefix(n)),
-        }
-    }
 }

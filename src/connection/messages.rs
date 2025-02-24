@@ -289,7 +289,7 @@ impl BackendMessage<'_> for ParseComplete {
 
 /// https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-BIND
 pub struct Bind<F> {
-    pub write_params: F,
+    pub params: F,
 }
 
 impl<F> Message for Bind<F> {}
@@ -305,7 +305,7 @@ where
         write_cstr(c"", dst);
         write_i16(1, dst);
         write_i16(1, dst);
-        (self.write_params)(dst)?;
+        (self.params)(dst)?;
         write_i16(1, dst);
         write_i16(1, dst);
         Ok(())
