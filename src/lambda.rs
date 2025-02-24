@@ -20,17 +20,18 @@ where
     pub async fn call<'a, T: FromQueryResult<'a, R>>(
         self,
         conn: &'a mut Connection<impl Transport>,
-    ) -> Result<T::Output> {
-        let rows = conn.extended_query(self.statement, self.write_params).await?;
-        T::from_rows(rows).await
+    ) -> Result<T> {
+        conn.extended_query(self.statement, self.write_params).await?;
+        T::from_conn(conn).await
     }
 
     pub fn call_sync<'a, T: FromQueryResult<'a, R>>(
         self,
         conn: &'a mut Connection<impl SyncTransport>,
-    ) -> Result<T::Output> {
+    ) -> Result<T::SyncOutput> {
         self.call::<T>(conn)
             .now_or_never()
             .expect("transport marked as sync should not use awaits")
+            .map(T::syncify)
     }
 }

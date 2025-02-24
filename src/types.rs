@@ -1,11 +1,8 @@
 use std::io::{Error, ErrorKind, Read, Result, Write};
 use std::marker::PhantomData;
-use std::pin::pin;
 use std::str;
 
-use futures::{Stream, StreamExt};
-
-use crate::connection::Row;
+use crate::connection::{Connection, Transport};
 
 pub trait PgType {
     // Have a create type and a raw type
@@ -89,57 +86,40 @@ impl<'a> FromPgValue<'a, Text> for String {
 
 // See: https://github.com/rust-lang/rust/issues/87479
 pub trait FromQueryResult<'a, T>: Sized {
-    type Output;
-
     type SyncOutput;
 
     #[allow(async_fn_in_trait)]
-    async fn from_rows<S>(rows: S) -> Result<Self::Output>
-    where
-        S: Stream<Item = Result<Row<'a>>>;
+    async fn from_conn(conn: &'a mut Connection<impl Transport>) -> Result<Self>;
 
     /// Assumes all [`Future`](std::future::Future)s resolve immediately and produces an output that can be consumed in a sync context.
-    fn unsyncify(output: Self::Output) -> Self::SyncOutput;
+    fn syncify(self) -> Self::SyncOutput;
 }
 
-impl<'a> FromQueryResult<'a, ()> for () {
-    type Output = Self;
+impl FromQueryResult<'_, ()> for () {
+    type SyncOutput = Self;
 
-    type SyncOutput = Self::Output;
-
-    async fn from_rows<S>(mut rows: S) -> Result<Self::Output>
-    where
-        S: Stream<Item = Result<Row<'a>>>,
-    {
-        match pin!(rows).next().await {
-            Some(res) => {
-                res?;
-                Err(Error::new(
-                    ErrorKind::InvalidData,
-                    "unexpected non-empty query result",
-                ))
-            }
+    async fn from_conn(conn: &mut Connection<impl Transport>) -> Result<Self> {
+        match conn.next_row().await? {
+            Some(_) => Err(Error::new(
+                ErrorKind::InvalidData,
+                "unexpected non-empty query result",
+            )),
             None => Ok(()),
         }
     }
 
-    fn unsyncify(output: Self::Output) -> Self::SyncOutput {
-        output
+    fn syncify(self) -> Self::SyncOutput {
+        self
     }
 }
 
 impl<'a, T: PgType, U: FromPgValue<'a, T>> FromQueryResult<'a, T> for U {
-    type Output = Self;
+    type SyncOutput = Self;
 
-    type SyncOutput = Self::Output;
-
-    async fn from_rows<S>(mut rows: S) -> Result<Self::Output>
-    where
-        S: Stream<Item = Result<Row<'a>>>,
-    {
-        match pin!(rows).next().await {
-            Some(res) => {
-                let column = res?
+    async fn from_conn(conn: &'a mut Connection<impl Transport>) -> Result<Self> {
+        match conn.next_row().await? {
+            Some(mut row) => {
+                let column = row
                     .next()
                     .ok_or_else(|| Error::new(ErrorKind::InvalidData, "unexpected empty row"))??;
                 match column {
@@ -154,30 +134,33 @@ impl<'a, T: PgType, U: FromPgValue<'a, T>> FromQueryResult<'a, T> for U {
         }
     }
 
-    fn unsyncify(output: Self::Output) -> Self::SyncOutput {
-        output
+    fn syncify(self) -> Self::SyncOutput {
+        self
     }
 }
 
 pub struct AnonymousTable<T>(PhantomData<T>);
 
-impl<'a, T0: PgType, U0: FromPgValue<'a, T0>> FromQueryResult<'a, AnonymousTable<(T0,)>> for (U0,) {
-    type Output = ();
+impl<'a, T0: PgType, U0: FromPgValue<'a, T0>> FromQueryResult<'a, AnonymousTable<(T0,)>> for Vec<(U0,)> {
+    type SyncOutput = Self;
 
-    type SyncOutput = ();
-
-    async fn from_rows<S>(rows: S) -> Result<Self::Output>
-    where
-        S: Stream<Item = Result<Row<'a>>>,
-    {
-        todo!()
+    async fn from_conn(conn: &'a mut Connection<impl Transport>) -> Result<Self> {
+        match conn.next_row().await? {
+            Some(_) => todo!(),
+            None => todo!(),
+        }
     }
 
-    fn unsyncify(output: Self::Output) -> Self::SyncOutput {
-        todo!()
+    fn syncify(self) -> Self::SyncOutput {
+        self
     }
 }
 
-trait X<'a> {
-    type Gat<Y>;
-}
+// fn from_conn<'a>(conn: &'a mut Connection<impl Transport>) -> impl futures::Stream<Item = Result<&'a [u8]>> {
+//     futures::stream::try_unfold(conn, |conn| async {
+//         match conn.next_row().await? {
+//             Some(mut row) => Ok(Some((row.next().unwrap().unwrap().unwrap(), conn))),
+//             None => Ok(None),
+//         }
+//     })
+// }

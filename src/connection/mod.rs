@@ -1,9 +1,8 @@
 use std::io::Result;
 use std::iter::FusedIterator;
 
-use futures::Stream;
 use messages::{
-    Authentication, BackendKeyData, BackendMessage, Bind, BindComplete, DataRow, ErrorResponse, Execute, FrontendMessage, NegotiateProtocolVersion, NoticeResponse, ParameterStatus, Parse, ParseComplete, ReadyForQuery, StartupMessage
+    Authentication, BackendKeyData, BackendMessage, Bind, BindComplete, CommandComplete, DataRow, EmptyQueryResponse, ErrorResponse, Execute, FrontendMessage, NegotiateProtocolVersion, NoticeResponse, ParameterStatus, Parse, ParseComplete, ReadyForQuery, StartupMessage
 };
 use util::{read_i32, read_slice, unexpected_message_prefix, write_i32};
 
@@ -126,11 +125,13 @@ impl<T: Transport> BufferedTransport<T> {
     async fn receive_unhandled(&mut self) -> Result<AnyMessage> {
         loop {
             let msg = self.receive_any().await?;
-    
+
             // todo: enhance error and warning reportings.
             match msg.prefix() {
                 ErrorResponse::PREFIX => return Err(msg.read::<ErrorResponse>()?.into()),
-                NegotiateProtocolVersion::PREFIX => return Err(msg.read::<NegotiateProtocolVersion>()?.into()),
+                NegotiateProtocolVersion::PREFIX => {
+                    return Err(msg.read::<NegotiateProtocolVersion>()?.into())
+                }
                 NoticeResponse::PREFIX => {
                     msg.read::<NoticeResponse>()?;
                 }
@@ -153,7 +154,7 @@ impl<T: Transport> BufferedTransport<T> {
 
 pub struct Connection<T> {
     transport: BufferedTransport<T>,
-    secret_key: i32,
+    _secret_key: i32,
 }
 
 impl<T: Transport> Connection<T> {
@@ -187,10 +188,10 @@ impl<T: Transport> Connection<T> {
             BackendKeyData::PREFIX => {
                 let msg = msg.read::<BackendKeyData>()?;
                 secret_key = msg.secret_key;
-            },
+            }
             n => return Err(unexpected_message_prefix(n)),
         }
-        
+
         // Wait for ReadyForQuery
         let msg = transport.receive_unhandled().await?;
         match msg.prefix() {
@@ -200,23 +201,19 @@ impl<T: Transport> Connection<T> {
 
         Ok(Self {
             transport,
-            secret_key,
+            _secret_key: secret_key,
         })
     }
 
-    pub async fn extended_query<'a>(
-        &'a mut self,
+    pub(crate) async fn extended_query(
+        &mut self,
         statement: &str,
         write_params: impl Fn(&mut Vec<u8>) -> Result<()>,
-    ) -> Result<impl Stream<Item = Result<Row<'a>>>> {
+    ) -> Result<()> {
         // Send Parse, Bind and Execute to start the query
         self.transport.clear();
-        self.transport.write_one(Parse {
-            query: statement,
-        })?;
-        self.transport.write_one(Bind {
-            write_params,
-        })?;
+        self.transport.write_one(Parse { query: statement })?;
+        self.transport.write_one(Bind { write_params })?;
         self.transport.write_one(Execute)?;
         self.transport.send_all().await?;
 
@@ -234,9 +231,20 @@ impl<T: Transport> Connection<T> {
             n => return Err(unexpected_message_prefix(n)),
         }
 
-        // and now, a series of DataRow followed by a CommandComplete or an EmptyQueryResponse
+        Ok(())
+    }
 
-        Ok(futures::stream::empty())
+    pub(crate) async fn next_row(&mut self) -> Result<Option<Row>> {
+        let msg = self.transport.receive_unhandled().await?;
+        match msg.prefix() {
+            CommandComplete::PREFIX | EmptyQueryResponse::PREFIX => Ok(None),
+            DataRow::PREFIX => {
+                Ok(Some(Row {
+                    inner: msg.read()?,
+                }))
+            }
+            n => Err(unexpected_message_prefix(n)),
+        }
     }
 }
 
@@ -244,8 +252,4 @@ impl<T: Transport> Connection<T> {
 pub struct ConnectionManager<T> {
     config: Config,
     _marker: std::marker::PhantomData<fn(T)>,
-}
-
-pub struct RowsStream<'a, T: Transport> {
-    conn: &'a mut Connection<T>,
 }
