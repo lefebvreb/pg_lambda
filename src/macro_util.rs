@@ -10,7 +10,7 @@ pub use crate::lambda::PgLambda;
 pub use crate::schema::{
     Column, ColumnTuple, Constraint, Name, ReferentialAction, Table, TableName, TableSchema,
 };
-pub use crate::types::{SetOf, PgType, ToPgValue};
+pub use crate::types::{PgType, SetOf, ToPgValue};
 
 pub struct TableDef {
     pub schema: &'static TableSchema,

@@ -126,14 +126,8 @@ pub struct Void;
 impl FromQueryResult<'_, Void> for () {
     type SyncOutput = Self;
 
-    async fn from_stream(stream: &mut RowsStream<impl Transport>) -> Result<Self> {
-        match stream.next().await? {
-            Some(_) => Err(Error::new(
-                ErrorKind::InvalidData,
-                "unexpected non-empty query result",
-            )),
-            None => Ok(()),
-        }
+    async fn from_stream(_: &mut RowsStream<impl Transport>) -> Result<Self> {
+        Ok(())
     }
 
     fn syncify(self) -> Self::SyncOutput {
@@ -147,7 +141,7 @@ impl<'a, R, T: FromRow<'a, R>> FromQueryResult<'a, Single<R>> for T {
     type SyncOutput = Self;
 
     async fn from_stream(stream: &'a mut RowsStream<impl Transport>) -> Result<Self> {
-        // todo: figure out a way to pull the first None that comes right after
+        // todo: figure out a way to pull the first None that comes right after this
         match stream.next().await? {
             Some(row) => T::from_row(row),
             None => Err(Error::new(

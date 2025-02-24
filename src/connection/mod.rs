@@ -2,12 +2,15 @@ use std::io::Result;
 use std::iter::FusedIterator;
 use std::mem::transmute;
 
+use futures::FutureExt;
 use messages::{
     Authentication, BackendKeyData, BackendMessage, Bind, BindComplete, CommandComplete, DataRow,
     EmptyQueryResponse, ErrorResponse, Execute, FrontendMessage, NegotiateProtocolVersion,
     NoticeResponse, ParameterStatus, Parse, ParseComplete, ReadyForQuery, StartupMessage, Sync,
 };
 use util::{read_i32, read_slice, unexpected_message_prefix, write_i32};
+
+use crate::types::FromQueryResult;
 
 mod impls;
 mod messages;
@@ -144,37 +147,11 @@ impl<T: Transport> BufferedTransport<T> {
     }
 }
 
-enum TransactionState {
-    None,
-    Underway,
-    Failed,
-}
-
 pub struct Connection<T> {
     transport: BufferedTransport<T>,
-    transaction_state: TransactionState,
-    _secret_key: i32,
 }
 
 impl<T: Transport> Connection<T> {
-    /// Waits for a ReadyForQuery
-    async fn sync(&mut self) -> Result<()> {
-        loop {
-            let msg = self.transport.receive_unhandled().await?;
-            match msg.prefix() {
-                ReadyForQuery::PREFIX => {
-                    self.transaction_state = match msg.read::<ReadyForQuery>()? {
-                        ReadyForQuery::Idle => TransactionState::None,
-                        ReadyForQuery::Transaction => TransactionState::Underway,
-                        ReadyForQuery::FailedTransaction => TransactionState::Failed,
-                    };
-                    return Ok(());
-                }
-                _ => (),
-            }
-        }
-    }
-
     pub async fn connect(config: &Config) -> Result<Self> {
         let mut transport = BufferedTransport {
             transport: T::connect(config).await?,
@@ -199,7 +176,7 @@ impl<T: Transport> Connection<T> {
 
         // Wait for BackendKeyData
         let msg = transport.receive_unhandled().await?;
-        let secret_key = match msg.prefix() {
+        match msg.prefix() {
             BackendKeyData::PREFIX => {
                 let msg = msg.read::<BackendKeyData>()?;
                 msg.secret_key
@@ -207,18 +184,14 @@ impl<T: Transport> Connection<T> {
             n => return Err(unexpected_message_prefix(n)),
         };
 
-        Ok(Self {
-            transport,
-            transaction_state: TransactionState::None,
-            _secret_key: secret_key,
-        })
+        Ok(Self { transport })
     }
 
-    pub async fn query<'a>(
+    pub async fn query<'a, R, U: FromQueryResult<'a, R>>(
         &'a mut self,
         statement: &str,
         params: impl Fn(&mut Vec<u8>) -> Result<()>,
-    ) -> Result<&'a mut RowsStream<T>> {
+    ) -> Result<U> {
         self.sync().await?;
 
         // Send Parse, Bind, Execute and Sync to start the query
@@ -243,7 +216,38 @@ impl<T: Transport> Connection<T> {
             n => return Err(unexpected_message_prefix(n)),
         }
 
-        Ok(RowsStream::new(self))
+        U::from_stream(RowsStream::new(self)).await
+    }
+
+    /// Waits for a ReadyForQuery
+    async fn sync(&mut self) -> Result<()> {
+        loop {
+            let msg = self.transport.receive_unhandled().await?;
+            match msg.prefix() {
+                ReadyForQuery::PREFIX => return Ok(()),
+                CommandComplete::PREFIX | EmptyQueryResponse::PREFIX | DataRow::PREFIX => (),
+                n => return Err(unexpected_message_prefix(n)),
+            }
+        }
+    }
+}
+
+impl<T: SyncTransport> Connection<T> {
+    pub fn connnect_sync(config: &Config) -> Result<Self> {
+        Self::connect(config)
+            .now_or_never()
+            .expect("transport should be sync")
+    }
+
+    pub fn query_sync<'a, R, U: FromQueryResult<'a, R>>(
+        &'a mut self,
+        statement: &str,
+        params: impl Fn(&mut Vec<u8>) -> Result<()>,
+    ) -> Result<U::SyncOutput> {
+        self.query(statement, params)
+            .now_or_never()
+            .expect("transport should be sync")
+            .map(U::syncify)
     }
 }
 

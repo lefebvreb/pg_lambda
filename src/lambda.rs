@@ -1,7 +1,6 @@
 use std::io::Result;
 use std::marker::PhantomData;
 
-use futures::FutureExt;
 pub use pg_lambda_macros::pg_lambda;
 
 use crate::connection::{Connection, SyncTransport, Transport};
@@ -21,19 +20,13 @@ where
         self,
         conn: &'a mut Connection<impl Transport>,
     ) -> Result<T> {
-        let stream = conn
-            .query(self.statement, self.write_params)
-            .await?;
-        T::from_stream(stream).await
+        conn.query(self.statement, self.write_params).await
     }
 
     pub fn call_sync<'a, T: FromQueryResult<'a, R>>(
         self,
         conn: &'a mut Connection<impl SyncTransport>,
     ) -> Result<T::SyncOutput> {
-        self.call::<T>(conn)
-            .now_or_never()
-            .expect("transport marked as sync should not use awaits")
-            .map(T::syncify)
+        conn.query_sync::<R, T>(self.statement, self.write_params)
     }
 }
