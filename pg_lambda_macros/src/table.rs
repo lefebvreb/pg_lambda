@@ -1,6 +1,6 @@
 use indexmap::IndexMap;
-use pest::iterators::{Pair, Pairs};
 use pest::Parser;
+use pest::iterators::{Pair, Pairs};
 use pest_derive::Parser;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -240,7 +240,10 @@ enum ContainerAttribute {
 impl ContainerAttribute {
     fn from_meta(ParsedMeta { name, value }: &ParsedMeta) -> Result<Self> {
         Ok(match (name.to_string().as_str(), value) {
-            ("schema", None) => bail!(name.span(), "expected a schema name: `schema = \"my_schema\"`"),
+            ("schema", None) => bail!(
+                name.span(),
+                "expected a schema name: `schema = \"my_schema\"`"
+            ),
             ("schema", Some(lit)) => {
                 let src = lit.value();
                 ensure_let!(
@@ -251,7 +254,7 @@ impl ContainerAttribute {
                 Self::Schema {
                     name: pairs.next().unwrap().as_str().to_owned(),
                 }
-            },
+            }
             ("primary_key", None) => bail!(
                 name.span(),
                 "expected a value: `primary_key = \"(<column>, …)\"`",
@@ -266,7 +269,7 @@ impl ContainerAttribute {
                 Self::PrimaryKey {
                     columns: extract_column_tuple(pairs.next().unwrap()),
                 }
-            },
+            }
             ("foreign_key", None) => bail!(
                 name.span(),
                 "expected a foreign key constraint description: `foreign_key = \"(<column>, …) <table_name> (<refcolumn>, …) <delete_action>?\"`",
@@ -284,14 +287,12 @@ impl ContainerAttribute {
                     columns,
                     references,
                 }
-            },
+            }
             ("check", None) => bail!(
                 name.span(),
                 "expected a check expression: `check = \"<sql_expression>\"`",
             ),
-            ("check", Some(lit)) => Self::Check { 
-                expr: lit.value(),
-            },
+            ("check", Some(lit)) => Self::Check { expr: lit.value() },
             ("unique", None) => bail!(
                 name.span(),
                 "expected a unique constraint description: `unique = \"(<column>, …) <nulls_not_distinct>?\"`",
@@ -305,9 +306,15 @@ impl ContainerAttribute {
                 );
                 let columns = extract_column_tuple(pairs.next().unwrap());
                 let nulls_not_distinct = pairs.next().is_some();
-                Self::Unique { columns, nulls_not_distinct }
+                Self::Unique {
+                    columns,
+                    nulls_not_distinct,
+                }
             }
-            _ => bail!(name.span(), "unknown table derive option, expected one of `\"schema\"`, `\"primary_key\"`, `\"foreign_key\"`, `\"check\"` or `\"unique\"`"),
+            _ => bail!(
+                name.span(),
+                "unknown table derive option, expected one of `\"schema\"`, `\"primary_key\"`, `\"foreign_key\"`, `\"check\"` or `\"unique\"`"
+            ),
         })
     }
 }
@@ -323,7 +330,10 @@ impl FieldAttribute {
         Ok(match (name.to_string().as_str(), value) {
             ("primary_key", None) => Self::PrimaryKey,
             ("primary_key", Some(lit)) => bail!(lit.span(), "expected no value"),
-            ("foreign_key", None) => bail!(name.span(), "expected a foreign key constraint description: `foreign_key = \"<table_name> (<refcolumn>) <delete_action>?\"`"),
+            ("foreign_key", None) => bail!(
+                name.span(),
+                "expected a foreign key constraint description: `foreign_key = \"<table_name> (<refcolumn>) <delete_action>?\"`"
+            ),
             ("foreign_key", Some(lit)) => {
                 let src = lit.value();
                 ensure_let!(
@@ -333,8 +343,10 @@ impl FieldAttribute {
                 );
                 let references = extract_references(pairs);
                 Self::ForeignKey { references }
+            }
+            ("unique", None) => Self::Unique {
+                nulls_not_distinct: false,
             },
-            ("unique", None) => Self::Unique { nulls_not_distinct: false },
             ("unique", Some(lit)) => {
                 let src = lit.value();
                 ensure!(
@@ -342,9 +354,14 @@ impl FieldAttribute {
                     lit.span(),
                     "expected either no string value or `\"nulls_not_distinct\"`",
                 );
-                Self::Unique { nulls_not_distinct: true }
-            },
-            _ => bail!(name.span(), "unknown table derive option, expected one of `\"primary_key\"`, `\"foreign_key\"` or `\"unique\"`"),
+                Self::Unique {
+                    nulls_not_distinct: true,
+                }
+            }
+            _ => bail!(
+                name.span(),
+                "unknown table derive option, expected one of `\"primary_key\"`, `\"foreign_key\"` or `\"unique\"`"
+            ),
         })
     }
 }

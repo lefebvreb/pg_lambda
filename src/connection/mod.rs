@@ -99,17 +99,17 @@ impl<T: Transport> BufferedTransport<T> {
         if let Some(byte) = M::PREFIX {
             self.stack.push(byte);
         }
-        let len = self.stack.len();
+        let start = self.stack.len();
         if let Some(size) = M::SIZE {
             write_i32(size, &mut self.stack);
             msg.write(&mut self.stack)
-                .inspect_err(|_| self.stack.truncate(len))?;
+                .inspect_err(|_| self.stack.truncate(start))?;
         } else {
             self.stack.extend([0; 4]);
             msg.write(&mut self.stack)
-                .inspect_err(|_| self.stack.truncate(len))?;
-            let size = (self.stack.len() - len) as i32;
-            self.stack[len..len + 4].copy_from_slice(&size.to_be_bytes());
+                .inspect_err(|_| self.stack.truncate(start))?;
+            let size = (self.stack.len() - start) as i32;
+            self.stack[start..start + 4].copy_from_slice(&size.to_be_bytes());
         }
         Ok(())
     }
@@ -122,42 +122,38 @@ impl<T: Transport> BufferedTransport<T> {
         res
     }
 
-    async fn receive_one(&mut self) -> Result<AnyMessage> {
-        let len = self.stack.len();
+    async fn receive_one(&mut self) -> Result<()> {
+        let start = self.stack.len();
         self.transport.read_exact(5, &mut self.stack).await?;
-        let size = i32::from_be_bytes(self.stack[len + 1..len + 5].try_into().unwrap());
+        let size = i32::from_be_bytes(self.stack[start + 1..start + 5].try_into().unwrap());
         self.transport.read_exact(size, &mut self.stack).await?;
-        Ok(AnyMessage(&self.stack[len..]))
+        Ok(())
     }
 
     async fn receive_unhandled(&mut self) -> Result<AnyMessage> {
         loop {
-            let len = self.stack.len();
-            let msg = match self.receive_one().await {
-                Ok(msg) => msg,
-                Err(err) => {
-                    self.stack.truncate(len);
-                    return Err(err);
-                }
-            };
+            let start = self.stack.len();
+            self.receive_one()
+                .await
+                .inspect_err(|_| self.stack.truncate(start))?;
             // todo: enhance error and warning reportings.
-            match msg.prefix() {
+            match self.stack[0] {
                 ErrorResponse::PREFIX => {
-                    let err = msg
+                    let err = AnyMessage(&self.stack[start..])
                         .read::<ErrorResponse>()
                         .map_or_else(identity, Error::from);
-                    self.stack.truncate(len);
+                    self.stack.truncate(start);
                     return Err(err);
                 }
                 NegotiateProtocolVersion::PREFIX => {
-                    let err = msg
+                    let err = AnyMessage(&self.stack[start..])
                         .read::<NegotiateProtocolVersion>()
                         .map_or_else(identity, Error::from);
-                    self.stack.truncate(len);
+                    self.stack.truncate(start);
                     return Err(err);
                 }
-                NoticeResponse::PREFIX | ParameterStatus::PREFIX => self.stack.truncate(len),
-                _ => return Ok(AnyMessage(&self.stack[len..])),
+                NoticeResponse::PREFIX | ParameterStatus::PREFIX => self.stack.truncate(start),
+                _ => return Ok(AnyMessage(&self.stack[start..])),
             }
         }
     }
@@ -196,15 +192,14 @@ impl<T: Transport> Connection<T> {
         transport.clear();
 
         // Wait for BackendKeyData
-        let secret_key;
         let msg = transport.receive_unhandled().await?;
-        match msg.prefix() {
+        let secret_key = match msg.prefix() {
             BackendKeyData::PREFIX => {
                 let msg = msg.read::<BackendKeyData>()?;
-                secret_key = msg.secret_key;
+                msg.secret_key
             }
             n => return Err(unexpected_message_prefix(n)),
-        }
+        };
         transport.clear();
 
         // Wait for ReadyForQuery
@@ -256,9 +251,9 @@ impl<T: Transport> Connection<T> {
 }
 
 /// A stream of rows produced as a result of a query.
-/// 
+///
 /// # Why is this not a regular [`Stream`](futures::stream::Stream)?
-/// 
+///
 /// Rows returned by [`RowsStream`] hold a reference to the buffer that
 /// is inside the underlying [`Connection`]. This pattern in rust is
 /// called a "lending iterator", or "streaming interator" and is not
@@ -271,12 +266,10 @@ impl<T: Transport> RowsStream<T> {
         // SAFETY: `RowsStream<T>` is a `transparent` wrapper of `Connection<T>`,
         // it is therefore safe to transmute a mutable reference of one into a
         // mutable reference of the other.
-        unsafe {
-            transmute(conn)
-        }
+        unsafe { transmute(conn) }
     }
 
-    pub async fn next<'a>(&'a mut self) -> Result<Option<Row<'a>>> {
+    pub async fn next(&mut self) -> Result<Option<Row>> {
         let msg = self.0.transport.receive_unhandled().await?;
         match msg.prefix() {
             CommandComplete::PREFIX | EmptyQueryResponse::PREFIX => Ok(None),

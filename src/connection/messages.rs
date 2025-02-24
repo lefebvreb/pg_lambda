@@ -136,7 +136,7 @@ impl BackendMessage<'_> for ReadyForQuery {
                 return Err(Error::new(
                     ErrorKind::InvalidData,
                     format!("unknown backend transaction status indicator: 0x{n:x}"),
-                ))
+                ));
             }
         })
     }
@@ -214,7 +214,7 @@ impl<'a> BackendMessage<'a> for NegotiateProtocolVersion<'a> {
 
 /// https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-BACKENDKEYDATA
 pub struct BackendKeyData {
-    pub proc_id: i32,
+    pub _proc_id: i32,
     pub secret_key: i32,
 }
 
@@ -227,7 +227,7 @@ impl BackendMessage<'_> for BackendKeyData {
 
     fn read(src: &mut &'_ [u8]) -> Result<Self> {
         Ok(Self {
-            proc_id: read_i32(src)?,
+            _proc_id: read_i32(src)?,
             secret_key: read_i32(src)?,
         })
     }

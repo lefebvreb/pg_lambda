@@ -21,7 +21,8 @@ where
         self,
         conn: &'a mut Connection<impl Transport>,
     ) -> Result<T> {
-        let stream = conn.extended_query(self.statement, self.write_params)
+        let stream = conn
+            .extended_query(self.statement, self.write_params)
             .await?;
         T::from_rows(stream).await
     }

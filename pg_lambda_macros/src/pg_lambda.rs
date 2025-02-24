@@ -1,12 +1,12 @@
 use md5::{Digest, Md5};
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::{quote, ToTokens};
+use quote::{ToTokens, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::token::Paren;
 use syn::{
-    braced, parenthesized, Attribute, Ident, LitStr, Result, Token, Type, TypePath, Visibility,
+    Attribute, Ident, LitStr, Result, Token, Type, TypePath, Visibility, braced, parenthesized,
 };
 
 use crate::util;

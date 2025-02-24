@@ -83,7 +83,11 @@ impl From<NegotiateProtocolVersion<'_>> for Error {
             format!(
                 "unsupported protocol version, newest minor protocol supported version is {}, the following options are unsupported: {}",
                 msg.min_supported,
-                msg.unsupported.into_iter().flat_map(CStr::to_str).collect::<Vec<_>>().join(", "),
+                msg.unsupported
+                    .into_iter()
+                    .flat_map(CStr::to_str)
+                    .collect::<Vec<_>>()
+                    .join(", "),
             ),
         )
     }

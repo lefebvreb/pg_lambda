@@ -2,7 +2,7 @@ use std::io::{Error, ErrorKind, Read, Result, Write};
 use std::marker::PhantomData;
 use std::str;
 
-use crate::connection::{Connection, RowsStream, Transport};
+use crate::connection::{RowsStream, Transport};
 
 pub trait PgType {
     // Have a create type and a raw type
