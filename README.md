@@ -14,3 +14,4 @@ After `0.1.0`:
 * Add support for more PostgreSQL types.
 * Add support for SSL stream encryption with `rustls` and `tokio-rustls`.
 * Add more features to schemas.
+* Support more authentication methods.

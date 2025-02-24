@@ -177,10 +177,7 @@ impl<T: Transport> Connection<T> {
         // Wait for BackendKeyData
         let msg = transport.receive_unhandled().await?;
         match msg.prefix() {
-            BackendKeyData::PREFIX => {
-                let msg = msg.read::<BackendKeyData>()?;
-                msg.secret_key
-            }
+            BackendKeyData::PREFIX => (),
             n => return Err(unexpected_message_prefix(n)),
         };
 

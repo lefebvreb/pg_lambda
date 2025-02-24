@@ -213,10 +213,7 @@ impl<'a> BackendMessage<'a> for NegotiateProtocolVersion<'a> {
 }
 
 /// https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-BACKENDKEYDATA
-pub struct BackendKeyData {
-    pub _proc_id: i32,
-    pub secret_key: i32,
-}
+pub struct BackendKeyData;
 
 impl Message for BackendKeyData {
     const SIZE: Option<i32> = Some(12);
@@ -225,30 +222,21 @@ impl Message for BackendKeyData {
 impl BackendMessage<'_> for BackendKeyData {
     const PREFIX: u8 = b'K';
 
-    fn read(src: &mut &'_ [u8]) -> Result<Self> {
-        Ok(Self {
-            _proc_id: read_i32(src)?,
-            secret_key: read_i32(src)?,
-        })
+    fn read(_: &mut &[u8]) -> Result<Self> {
+        Ok(Self)
     }
 }
 
 /// https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-PARAMETERSTATUS
-pub struct ParameterStatus<'a> {
-    pub name: &'a CStr,
-    pub value: &'a CStr,
-}
+pub struct ParameterStatus;
 
-impl Message for ParameterStatus<'_> {}
+impl Message for ParameterStatus {}
 
-impl<'a> BackendMessage<'a> for ParameterStatus<'a> {
+impl BackendMessage<'_> for ParameterStatus {
     const PREFIX: u8 = b'S';
 
-    fn read(src: &mut &'a [u8]) -> Result<Self> {
-        Ok(Self {
-            name: read_cstr(src)?,
-            value: read_cstr(src)?,
-        })
+    fn read(_: &mut &[u8]) -> Result<Self> {
+        Ok(Self)
     }
 }
 
@@ -360,19 +348,15 @@ impl BackendMessage<'_> for EmptyQueryResponse {
 }
 
 /// https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-COMMANDCOMPLETE
-pub struct CommandComplete<'a> {
-    pub tag: &'a CStr,
-}
+pub struct CommandComplete;
 
-impl Message for CommandComplete<'_> {}
+impl Message for CommandComplete {}
 
-impl<'a> BackendMessage<'a> for CommandComplete<'a> {
+impl BackendMessage<'_> for CommandComplete {
     const PREFIX: u8 = b'C';
 
-    fn read(src: &mut &'a [u8]) -> Result<Self> {
-        Ok(Self {
-            tag: read_cstr(src)?,
-        })
+    fn read(_: &mut &[u8]) -> Result<Self> {
+        Ok(Self)
     }
 }
 
