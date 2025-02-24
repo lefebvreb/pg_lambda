@@ -264,7 +264,7 @@ pub struct RowsStream<T>(Connection<T>);
 
 impl<T: Transport> RowsStream<T> {
     fn new(conn: &mut Connection<T>) -> &mut Self {
-        // SAFETY: `RowsStream<T>` is a `transparent` wrapper of `Connection<T>`,
+        // SAFETY: `RowsStream<T>` is a `transparent` wrapper over a `Connection<T>`,
         // it is therefore safe to transmute a mutable reference of one into a
         // mutable reference of the other.
         unsafe { transmute(conn) }

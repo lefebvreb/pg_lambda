@@ -6,20 +6,20 @@ pub use pg_lambda_macros::pg_lambda;
 use crate::connection::{Connection, SyncTransport, Transport};
 use crate::types::FromQueryResult;
 
-pub struct PgLambda<F, R> {
+pub struct PgLambda<P, R> {
     pub(crate) statement: &'static str,
-    pub(crate) write_params: F,
+    pub(crate) write_params: P,
     pub(crate) _marker: PhantomData<R>,
 }
 
-impl<F, R> PgLambda<F, R>
+impl<P, R> PgLambda<P, R>
 where
-    F: Fn(&mut Vec<u8>) -> Result<()>,
+    P: Fn(&mut Vec<u8>) -> Result<()>,
 {
-    pub async fn call<'a, T: FromQueryResult<'a, R>>(
+    pub async fn call<'a, U: FromQueryResult<'a, R>>(
         self,
         conn: &'a mut Connection<impl Transport>,
-    ) -> Result<T> {
+    ) -> Result<U> {
         conn.query(self.statement, self.write_params).await
     }
 

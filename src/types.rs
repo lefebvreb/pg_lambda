@@ -121,6 +121,7 @@ pub trait FromQueryResult<'a, R>: Sized {
     fn syncify(self) -> Self::SyncOutput;
 }
 
+/// Marker for queries that are supposed to return nothing.
 pub struct Void;
 
 impl FromQueryResult<'_, Void> for () {
@@ -135,15 +136,16 @@ impl FromQueryResult<'_, Void> for () {
     }
 }
 
+/// Marker for queries that are supposed to return a single row.
 pub struct Single<R>(PhantomData<R>);
 
-impl<'a, R, T: FromRow<'a, R>> FromQueryResult<'a, Single<R>> for T {
+impl<'a, R, U: FromRow<'a, R>> FromQueryResult<'a, Single<R>> for U {
     type SyncOutput = Self;
 
     async fn from_stream(stream: &'a mut RowsStream<impl Transport>) -> Result<Self> {
         // todo: figure out a way to pull the first None that comes right after this
         match stream.next().await? {
-            Some(row) => T::from_row(row),
+            Some(row) => U::from_row(row),
             None => Err(Error::new(
                 ErrorKind::UnexpectedEof,
                 "unexpected empty query result",
@@ -156,16 +158,18 @@ impl<'a, R, T: FromRow<'a, R>> FromQueryResult<'a, Single<R>> for T {
     }
 }
 
+/// Marker for queries that are supposed to return a set of rows.
 pub struct SetOf<R>(PhantomData<R>);
 
-impl<'a, R, T: FromRow<'a, R>> FromQueryResult<'a, SetOf<R>> for T {
+impl<R, U: for<'x> FromRow<'x, R>> FromQueryResult<'_, SetOf<R>> for Vec<U> {
     type SyncOutput = Self;
 
-    async fn from_stream(stream: &'a mut RowsStream<impl Transport>) -> Result<Self> {
-        match stream.next().await? {
-            Some(row) => todo!(),
-            None => todo!(),
+    async fn from_stream(stream: &mut RowsStream<impl Transport>) -> Result<Self> {
+        let mut res = Vec::new();
+        while let Some(row) = stream.next().await? {
+            res.push(U::from_row(row)?);
         }
+        Ok(res)
     }
 
     fn syncify(self) -> Self::SyncOutput {
