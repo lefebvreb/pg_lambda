@@ -97,7 +97,7 @@ impl<T: Transport> BufferedTransport<T> {
         self.stack.clear();
     }
 
-    fn write_one<M: FrontendMessage>(&mut self, msg: M) -> Result<()> {
+    fn write<M: FrontendMessage>(&mut self, msg: M) -> Result<()> {
         if let Some(byte) = M::PREFIX {
             self.stack.push(byte);
         }
@@ -120,17 +120,12 @@ impl<T: Transport> BufferedTransport<T> {
         self.transport.write_all(&self.stack).await
     }
 
-    async fn receive_one(&mut self) -> Result<()> {
-        self.stack.clear();
-        self.transport.read_exact(5, &mut self.stack).await?;
-        let size = i32::from_be_bytes(self.stack[1..5].try_into().unwrap());
-        self.transport.read_exact(size, &mut self.stack).await?;
-        Ok(())
-    }
-
-    async fn receive_unhandled(&mut self) -> Result<AnyMessage> {
+    async fn receive(&mut self) -> Result<AnyMessage> {
         loop {
-            self.receive_one().await?;
+            self.stack.clear();
+            self.transport.read_exact(5, &mut self.stack).await?;
+            let size = i32::from_be_bytes(self.stack[1..5].try_into().unwrap());
+            self.transport.read_exact(size, &mut self.stack).await?;
 
             // todo: enhance error and warning reportings.
             match self.stack[0] {
@@ -159,14 +154,14 @@ impl<T: Transport> Connection<T> {
         };
 
         // Send StartupMessage
-        transport.write_one(StartupMessage {
+        transport.write(StartupMessage {
             user: &config.user,
             database: &config.database,
         })?;
         transport.send_all().await?;
 
         // Wait for Authenticate
-        let msg = transport.receive_unhandled().await?;
+        let msg = transport.receive().await?;
         match msg.prefix() {
             Authentication::PREFIX => match msg.read::<Authentication>()? {
                 Authentication::Ok => (),
@@ -175,7 +170,7 @@ impl<T: Transport> Connection<T> {
         }
 
         // Wait for BackendKeyData
-        let msg = transport.receive_unhandled().await?;
+        let msg = transport.receive().await?;
         match msg.prefix() {
             BackendKeyData::PREFIX => (),
             n => return Err(unexpected_message_prefix(n)),
@@ -193,21 +188,21 @@ impl<T: Transport> Connection<T> {
 
         // Send Parse, Bind, Execute and Sync to start the query
         self.transport.clear();
-        self.transport.write_one(Parse { query: statement })?;
-        self.transport.write_one(Bind { params })?;
-        self.transport.write_one(Execute)?;
-        self.transport.write_one(Sync)?;
+        self.transport.write(Parse { query: statement })?;
+        self.transport.write(Bind { params })?;
+        self.transport.write(Execute)?;
+        self.transport.write(Sync)?;
         self.transport.send_all().await?;
 
         // Waits for ParseComplete
-        let msg = self.transport.receive_unhandled().await?;
+        let msg = self.transport.receive().await?;
         match msg.prefix() {
             ParseComplete::PREFIX => (),
             n => return Err(unexpected_message_prefix(n)),
         }
 
         // Waits for BindComplete
-        let msg = self.transport.receive_unhandled().await?;
+        let msg = self.transport.receive().await?;
         match msg.prefix() {
             BindComplete::PREFIX => (),
             n => return Err(unexpected_message_prefix(n)),
@@ -219,7 +214,7 @@ impl<T: Transport> Connection<T> {
     /// Waits for a ReadyForQuery
     async fn sync(&mut self) -> Result<()> {
         loop {
-            let msg = self.transport.receive_unhandled().await?;
+            let msg = self.transport.receive().await?;
             match msg.prefix() {
                 ReadyForQuery::PREFIX => return Ok(()),
                 CommandComplete::PREFIX | EmptyQueryResponse::PREFIX | DataRow::PREFIX => (),
@@ -244,7 +239,7 @@ impl<T: SyncTransport> Connection<T> {
         self.query(statement, params)
             .now_or_never()
             .expect("transport should be sync")
-            .map(U::syncify)
+            .map(From::from)
     }
 }
 
@@ -268,7 +263,7 @@ impl<T: Transport> RowsStream<T> {
     }
 
     pub async fn next(&mut self) -> Result<Option<Row>> {
-        let msg = self.0.transport.receive_unhandled().await?;
+        let msg = self.0.transport.receive().await?;
         match msg.prefix() {
             CommandComplete::PREFIX | EmptyQueryResponse::PREFIX => Ok(None),
             DataRow::PREFIX => Ok(Some(Row { inner: msg.read()? })),

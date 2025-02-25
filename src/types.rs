@@ -112,13 +112,10 @@ impl<'a, R> FromRow<'a, R> for Row<'a> {
 
 // See: https://github.com/rust-lang/rust/issues/87479
 pub trait FromQueryResult<'a, R>: Sized {
-    type SyncOutput;
+    type SyncOutput: From<Self>;
 
     #[allow(async_fn_in_trait)]
     async fn from_stream(stream: &'a mut RowsStream<impl Transport>) -> Result<Self>;
-
-    /// Assumes all [`Future`](std::future::Future)s resolve immediately and produces an output that can be consumed in a sync context.
-    fn syncify(self) -> Self::SyncOutput;
 }
 
 /// Marker for queries that are supposed to return nothing.
@@ -129,10 +126,6 @@ impl FromQueryResult<'_, Void> for () {
 
     async fn from_stream(_: &mut RowsStream<impl Transport>) -> Result<Self> {
         Ok(())
-    }
-
-    fn syncify(self) -> Self::SyncOutput {
-        self
     }
 }
 
@@ -152,10 +145,6 @@ impl<'a, R, U: FromRow<'a, R>> FromQueryResult<'a, Single<R>> for U {
             )),
         }
     }
-
-    fn syncify(self) -> Self::SyncOutput {
-        self
-    }
 }
 
 /// Marker for queries that are supposed to return a set of rows.
@@ -170,9 +159,5 @@ impl<R, U: for<'x> FromRow<'x, R>> FromQueryResult<'_, SetOf<R>> for Vec<U> {
             res.push(U::from_row(row)?);
         }
         Ok(res)
-    }
-
-    fn syncify(self) -> Self::SyncOutput {
-        self
     }
 }
