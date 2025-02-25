@@ -1,5 +1,6 @@
 use std::io::{Error, ErrorKind, Read, Result, Write};
 use std::marker::PhantomData;
+use std::mem::transmute;
 use std::str;
 
 use crate::connection::{Row, RowsStream, Transport};
@@ -159,5 +160,29 @@ impl<R, U: for<'x> FromRow<'x, R>, T: Transport> FromQueryResult<'_, SetOf<R>, T
             res.push(U::from_row(row)?);
         }
         Ok(res)
+    }
+}
+
+#[repr(transparent)]
+pub struct Stream<R, U, T>(RowsStream<T>, PhantomData<(R, U)>);
+
+impl<'a, R, U: FromRow<'a, R>, T: Transport> Stream<R, U, T> {
+    fn new(stream: &mut RowsStream<T>) -> &mut Self {
+        // SAFETY: `Stream<R, U, T>` is a `transparent` wrapper over a `RowsStream<T>`,
+        // it is therefore safe to transmute a mutable reference of one into a
+        // mutable reference of the other.
+        unsafe { transmute::<&mut RowsStream<T>, &mut Stream<R, U, T>>(stream) }
+    }
+
+    pub async fn next(&'a mut self) -> Result<Option<U>> {
+        self.0.next().await?.map(U::from_row).transpose()
+    } 
+}
+
+impl<'a, R, U: FromRow<'a, R>, T: Transport> FromQueryResult<'a, SetOf<R>, T> for &'a mut Stream<R, U, T> {
+    type SyncOutput = Self;
+
+    async fn from_stream(stream: &'a mut RowsStream<T>) -> Result<Self> {
+        Ok(Stream::new(stream))
     }
 }

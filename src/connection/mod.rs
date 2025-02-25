@@ -138,8 +138,8 @@ impl<T: Transport> BufferedTransport<T> {
 }
 
 pub struct Connection<T> {
-    ready: bool,
     transport: BufferedTransport<T>,
+    ready: bool,
 }
 
 impl<T: Transport> Connection<T> {
@@ -173,8 +173,8 @@ impl<T: Transport> Connection<T> {
         };
 
         Ok(Self {
-            ready: false,
             transport,
+            ready: false,
         })
     }
 
@@ -289,5 +289,5 @@ impl<T: Transport> RowsStream<T> {
 #[cfg(any(feature = "bb8", feature = "deadpool", feature = "r2d2"))]
 pub struct ConnectionManager<T> {
     config: Config,
-    _marker: std::marker::PhantomData<fn(T)>,
+    _marker: std::marker::PhantomData<fn(T)>, 
 }
