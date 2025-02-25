@@ -26,11 +26,7 @@ pub struct PgLambdaDef {
 inventory::collect!(PgLambdaDef);
 
 pub fn new_lambda<F, R>(statement: &'static str, write_params: F) -> PgLambda<F, R> {
-    PgLambda {
-        statement,
-        write_params,
-        _marker: std::marker::PhantomData,
-    }
+    PgLambda::new(statement, write_params)
 }
 
 pub fn write_argcount(count: i32, dst: &mut Vec<u8>) {

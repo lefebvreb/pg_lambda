@@ -8,7 +8,7 @@ use messages::{
     EmptyQueryResponse, ErrorResponse, Execute, FrontendMessage, NegotiateProtocolVersion,
     NoticeResponse, ParameterStatus, Parse, ParseComplete, ReadyForQuery, StartupMessage, Sync,
 };
-use util::{read_i32, read_slice, unexpected_message_prefix, write_i32};
+use util::{read_i32, read_slice, unexpected_message_prefix};
 
 use crate::types::FromQueryResult;
 
@@ -97,21 +97,16 @@ impl<T: Transport> BufferedTransport<T> {
         self.stack.clear();
     }
 
-    fn write<M: FrontendMessage>(&mut self, msg: M) -> Result<()> {
+    fn write_one<M: FrontendMessage>(&mut self, msg: M) -> Result<()> {
         if let Some(byte) = M::PREFIX {
             self.stack.push(byte);
         }
 
-        if let Some(size) = M::SIZE {
-            write_i32(size, &mut self.stack);
-            msg.write(&mut self.stack)?;
-        } else {
-            let start = self.stack.len();
-            self.stack.extend([0; 4]);
-            msg.write(&mut self.stack)?;
-            let size = (self.stack.len() - start) as i32;
-            self.stack[start..start + 4].copy_from_slice(&size.to_be_bytes());
-        }
+        let start = self.stack.len();
+        self.stack.extend([0; 4]);
+        msg.write(&mut self.stack)?;
+        let size = (self.stack.len() - start) as i32;
+        self.stack[start..start + 4].copy_from_slice(&size.to_be_bytes());
 
         Ok(())
     }
@@ -120,7 +115,7 @@ impl<T: Transport> BufferedTransport<T> {
         self.transport.write_all(&self.stack).await
     }
 
-    async fn receive(&mut self) -> Result<AnyMessage> {
+    async fn receive_one(&mut self) -> Result<AnyMessage> {
         loop {
             self.stack.clear();
             self.transport.read_exact(5, &mut self.stack).await?;
@@ -143,6 +138,7 @@ impl<T: Transport> BufferedTransport<T> {
 }
 
 pub struct Connection<T> {
+    ready: bool,
     transport: BufferedTransport<T>,
 }
 
@@ -154,14 +150,14 @@ impl<T: Transport> Connection<T> {
         };
 
         // Send StartupMessage
-        transport.write(StartupMessage {
+        transport.write_one(StartupMessage {
             user: &config.user,
             database: &config.database,
         })?;
         transport.send_all().await?;
 
         // Wait for Authenticate
-        let msg = transport.receive().await?;
+        let msg = transport.receive_one().await?;
         match msg.prefix() {
             Authentication::PREFIX => match msg.read::<Authentication>()? {
                 Authentication::Ok => (),
@@ -170,39 +166,47 @@ impl<T: Transport> Connection<T> {
         }
 
         // Wait for BackendKeyData
-        let msg = transport.receive().await?;
+        let msg = transport.receive_one().await?;
         match msg.prefix() {
             BackendKeyData::PREFIX => (),
             n => return Err(unexpected_message_prefix(n)),
         };
 
-        Ok(Self { transport })
+        Ok(Self {
+            ready: false,
+            transport,
+        })
     }
 
-    pub async fn query<'a, R, U: FromQueryResult<'a, R>>(
+    pub async fn query<'a, R, U>(
         &'a mut self,
         statement: &str,
         params: impl Fn(&mut Vec<u8>) -> Result<()>,
-    ) -> Result<U> {
-        self.sync().await?;
+    ) -> Result<U>
+    where
+        U: FromQueryResult<'a, R, T>,
+    {
+        self.get_ready().await?;
 
         // Send Parse, Bind, Execute and Sync to start the query
         self.transport.clear();
-        self.transport.write(Parse { query: statement })?;
-        self.transport.write(Bind { params })?;
-        self.transport.write(Execute)?;
-        self.transport.write(Sync)?;
+        self.transport.write_one(Parse { query: statement })?;
+        self.transport.write_one(Bind { params })?;
+        self.transport.write_one(Execute)?;
+        self.transport.write_one(Sync)?;
         self.transport.send_all().await?;
 
+        self.ready = false;
+
         // Waits for ParseComplete
-        let msg = self.transport.receive().await?;
+        let msg = self.transport.receive_one().await?;
         match msg.prefix() {
             ParseComplete::PREFIX => (),
             n => return Err(unexpected_message_prefix(n)),
         }
 
         // Waits for BindComplete
-        let msg = self.transport.receive().await?;
+        let msg = self.transport.receive_one().await?;
         match msg.prefix() {
             BindComplete::PREFIX => (),
             n => return Err(unexpected_message_prefix(n)),
@@ -212,11 +216,18 @@ impl<T: Transport> Connection<T> {
     }
 
     /// Waits for a ReadyForQuery
-    async fn sync(&mut self) -> Result<()> {
+    async fn get_ready(&mut self) -> Result<()> {
+        if self.ready {
+            return Ok(());
+        }
+
         loop {
-            let msg = self.transport.receive().await?;
+            let msg = self.transport.receive_one().await?;
             match msg.prefix() {
-                ReadyForQuery::PREFIX => return Ok(()),
+                ReadyForQuery::PREFIX => {
+                    self.ready = true;
+                    return Ok(());
+                }
                 CommandComplete::PREFIX | EmptyQueryResponse::PREFIX | DataRow::PREFIX => (),
                 n => return Err(unexpected_message_prefix(n)),
             }
@@ -231,11 +242,14 @@ impl<T: SyncTransport> Connection<T> {
             .expect("transport should be sync")
     }
 
-    pub fn query_sync<'a, R, U: FromQueryResult<'a, R>>(
+    pub fn query_sync<'a, R, U>(
         &'a mut self,
         statement: &str,
         params: impl Fn(&mut Vec<u8>) -> Result<()>,
-    ) -> Result<U::SyncOutput> {
+    ) -> Result<U::SyncOutput>
+    where
+        U: FromQueryResult<'a, R, T>,
+    {
         self.query(statement, params)
             .now_or_never()
             .expect("transport should be sync")
@@ -259,11 +273,11 @@ impl<T: Transport> RowsStream<T> {
         // SAFETY: `RowsStream<T>` is a `transparent` wrapper over a `Connection<T>`,
         // it is therefore safe to transmute a mutable reference of one into a
         // mutable reference of the other.
-        unsafe { transmute(conn) }
+        unsafe { transmute::<&mut Connection<T>, &mut RowsStream<T>>(conn) }
     }
 
     pub async fn next(&mut self) -> Result<Option<Row>> {
-        let msg = self.0.transport.receive().await?;
+        let msg = self.0.transport.receive_one().await?;
         match msg.prefix() {
             CommandComplete::PREFIX | EmptyQueryResponse::PREFIX => Ok(None),
             DataRow::PREFIX => Ok(Some(Row { inner: msg.read()? })),

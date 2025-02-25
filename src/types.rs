@@ -111,20 +111,20 @@ impl<'a, R> FromRow<'a, R> for Row<'a> {
 // Derive for custom types
 
 // See: https://github.com/rust-lang/rust/issues/87479
-pub trait FromQueryResult<'a, R>: Sized {
+pub trait FromQueryResult<'a, R, T: Transport>: Sized {
     type SyncOutput: From<Self>;
 
     #[allow(async_fn_in_trait)]
-    async fn from_stream(stream: &'a mut RowsStream<impl Transport>) -> Result<Self>;
+    async fn from_stream(stream: &'a mut RowsStream<T>) -> Result<Self>;
 }
 
 /// Marker for queries that are supposed to return nothing.
 pub struct Void;
 
-impl FromQueryResult<'_, Void> for () {
+impl<T: Transport> FromQueryResult<'_, Void, T> for () {
     type SyncOutput = Self;
 
-    async fn from_stream(_: &mut RowsStream<impl Transport>) -> Result<Self> {
+    async fn from_stream(_: &mut RowsStream<T>) -> Result<Self> {
         Ok(())
     }
 }
@@ -132,10 +132,10 @@ impl FromQueryResult<'_, Void> for () {
 /// Marker for queries that are supposed to return a single row.
 pub struct Single<R>(PhantomData<R>);
 
-impl<'a, R, U: FromRow<'a, R>> FromQueryResult<'a, Single<R>> for U {
+impl<'a, R, U: FromRow<'a, R>, T: Transport> FromQueryResult<'a, Single<R>, T> for U {
     type SyncOutput = Self;
 
-    async fn from_stream(stream: &'a mut RowsStream<impl Transport>) -> Result<Self> {
+    async fn from_stream(stream: &'a mut RowsStream<T>) -> Result<Self> {
         // todo: figure out a way to pull the first None that comes right after this
         match stream.next().await? {
             Some(row) => U::from_row(row),
@@ -150,10 +150,10 @@ impl<'a, R, U: FromRow<'a, R>> FromQueryResult<'a, Single<R>> for U {
 /// Marker for queries that are supposed to return a set of rows.
 pub struct SetOf<R>(PhantomData<R>);
 
-impl<R, U: for<'x> FromRow<'x, R>> FromQueryResult<'_, SetOf<R>> for Vec<U> {
+impl<R, U: for<'x> FromRow<'x, R>, T: Transport> FromQueryResult<'_, SetOf<R>, T> for Vec<U> {
     type SyncOutput = Self;
 
-    async fn from_stream(stream: &mut RowsStream<impl Transport>) -> Result<Self> {
+    async fn from_stream(stream: &mut RowsStream<T>) -> Result<Self> {
         let mut res = Vec::new();
         while let Some(row) = stream.next().await? {
             res.push(U::from_row(row)?);

@@ -7,26 +7,38 @@ use crate::connection::{Connection, SyncTransport, Transport};
 use crate::types::FromQueryResult;
 
 pub struct PgLambda<P, R> {
-    pub(crate) statement: &'static str,
-    pub(crate) write_params: P,
-    pub(crate) _marker: PhantomData<R>,
+    statement: &'static str,
+    write_params: P,
+    _marker: PhantomData<R>,
+}
+
+impl<P, R> PgLambda<P, R> {
+    pub(crate) fn new(statement: &'static str, write_params: P) -> Self {
+        Self {
+            statement,
+            write_params,
+            _marker: PhantomData,
+        }
+    }
 }
 
 impl<P, R> PgLambda<P, R>
 where
     P: Fn(&mut Vec<u8>) -> Result<()>,
 {
-    pub async fn call<'a, U: FromQueryResult<'a, R>>(
-        self,
-        conn: &'a mut Connection<impl Transport>,
-    ) -> Result<U> {
+    pub async fn call<'a, U, T>(self, conn: &'a mut Connection<T>) -> Result<U>
+    where
+        U: FromQueryResult<'a, R, T>,
+        T: Transport,
+    {
         conn.query(self.statement, self.write_params).await
     }
 
-    pub fn call_sync<'a, T: FromQueryResult<'a, R>>(
-        self,
-        conn: &'a mut Connection<impl SyncTransport>,
-    ) -> Result<T::SyncOutput> {
-        conn.query_sync::<R, T>(self.statement, self.write_params)
+    pub fn call_sync<'a, U, T>(self, conn: &'a mut Connection<T>) -> Result<U::SyncOutput>
+    where
+        U: FromQueryResult<'a, R, T>,
+        T: SyncTransport,
+    {
+        conn.query_sync::<_, U>(self.statement, self.write_params)
     }
 }

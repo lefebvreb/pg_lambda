@@ -44,18 +44,13 @@ use super::util::*;
 
 pub const PROTOCOL_VERSION: i32 = 196608;
 
-pub trait Message: Sized {
-    /// Message length if it is known, discounting eventual first byte and including itself.
-    const SIZE: Option<i32> = None;
-}
-
-pub trait BackendMessage<'a>: Message {
+pub trait BackendMessage<'a>: Sized {
     const PREFIX: u8;
 
     fn read(src: &mut &'a [u8]) -> Result<Self>;
 }
 
-pub trait FrontendMessage: Message {
+pub trait FrontendMessage {
     const PREFIX: Option<u8> = None;
 
     fn write(&self, dst: &mut Vec<u8>) -> Result<()>;
@@ -67,8 +62,6 @@ pub trait FrontendMessage: Message {
 pub struct ErrorResponse<'a> {
     pub fields: HashMap<char, &'a CStr>,
 }
-
-impl Message for ErrorResponse<'_> {}
 
 impl<'a> BackendMessage<'a> for ErrorResponse<'a> {
     const PREFIX: u8 = b'E';
@@ -93,8 +86,6 @@ pub struct NoticeResponse<'a> {
     pub fields: HashMap<char, &'a CStr>,
 }
 
-impl Message for NoticeResponse<'_> {}
-
 impl<'a> BackendMessage<'a> for NoticeResponse<'a> {
     const PREFIX: u8 = b'N';
 
@@ -118,10 +109,6 @@ pub enum ReadyForQuery {
     Idle,
     Transaction,
     FailedTransaction,
-}
-
-impl Message for ReadyForQuery {
-    const SIZE: Option<i32> = Some(5);
 }
 
 impl BackendMessage<'_> for ReadyForQuery {
@@ -150,8 +137,6 @@ pub struct StartupMessage<'a> {
     pub database: &'a str,
 }
 
-impl Message for StartupMessage<'_> {}
-
 impl FrontendMessage for StartupMessage<'_> {
     fn write(&self, dst: &mut Vec<u8>) -> Result<()> {
         write_i32(PROTOCOL_VERSION, dst);
@@ -167,10 +152,6 @@ impl FrontendMessage for StartupMessage<'_> {
 // https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-AUTHENTICATIONOK
 pub enum Authentication {
     Ok,
-}
-
-impl Message for Authentication {
-    const SIZE: Option<i32> = Some(8);
 }
 
 impl<'a> BackendMessage<'a> for Authentication {
@@ -193,8 +174,6 @@ pub struct NegotiateProtocolVersion<'a> {
     pub unsupported: Vec<&'a CStr>,
 }
 
-impl Message for NegotiateProtocolVersion<'_> {}
-
 impl<'a> BackendMessage<'a> for NegotiateProtocolVersion<'a> {
     const PREFIX: u8 = b'v';
 
@@ -215,10 +194,6 @@ impl<'a> BackendMessage<'a> for NegotiateProtocolVersion<'a> {
 /// https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-BACKENDKEYDATA
 pub struct BackendKeyData;
 
-impl Message for BackendKeyData {
-    const SIZE: Option<i32> = Some(12);
-}
-
 impl BackendMessage<'_> for BackendKeyData {
     const PREFIX: u8 = b'K';
 
@@ -229,8 +204,6 @@ impl BackendMessage<'_> for BackendKeyData {
 
 /// https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-PARAMETERSTATUS
 pub struct ParameterStatus;
-
-impl Message for ParameterStatus {}
 
 impl BackendMessage<'_> for ParameterStatus {
     const PREFIX: u8 = b'S';
@@ -247,8 +220,6 @@ pub struct Parse<'a> {
     pub query: &'a str,
 }
 
-impl Message for Parse<'_> {}
-
 impl FrontendMessage for Parse<'_> {
     const PREFIX: Option<u8> = Some(b'P');
 
@@ -263,10 +234,6 @@ impl FrontendMessage for Parse<'_> {
 /// https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-PARSECOMPLETE
 pub struct ParseComplete;
 
-impl Message for ParseComplete {
-    const SIZE: Option<i32> = Some(4);
-}
-
 impl BackendMessage<'_> for ParseComplete {
     const PREFIX: u8 = b'1';
 
@@ -279,8 +246,6 @@ impl BackendMessage<'_> for ParseComplete {
 pub struct Bind<F> {
     pub params: F,
 }
-
-impl<F> Message for Bind<F> {}
 
 impl<F> FrontendMessage for Bind<F>
 where
@@ -303,10 +268,6 @@ where
 /// https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-BINDCOMPLETE
 pub struct BindComplete;
 
-impl Message for BindComplete {
-    const SIZE: Option<i32> = Some(4);
-}
-
 impl BackendMessage<'_> for BindComplete {
     const PREFIX: u8 = b'2';
 
@@ -317,10 +278,6 @@ impl BackendMessage<'_> for BindComplete {
 
 /// https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-EXECUTE
 pub struct Execute;
-
-impl Message for Execute {
-    const SIZE: Option<i32> = Some(9);
-}
 
 impl FrontendMessage for Execute {
     const PREFIX: Option<u8> = Some(b'E');
@@ -335,10 +292,6 @@ impl FrontendMessage for Execute {
 /// https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-EMPTYQUERYRESPONSE
 pub struct EmptyQueryResponse;
 
-impl Message for EmptyQueryResponse {
-    const SIZE: Option<i32> = Some(4);
-}
-
 impl BackendMessage<'_> for EmptyQueryResponse {
     const PREFIX: u8 = b'I';
 
@@ -349,8 +302,6 @@ impl BackendMessage<'_> for EmptyQueryResponse {
 
 /// https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-COMMANDCOMPLETE
 pub struct CommandComplete;
-
-impl Message for CommandComplete {}
 
 impl BackendMessage<'_> for CommandComplete {
     const PREFIX: u8 = b'C';
@@ -366,8 +317,6 @@ pub struct DataRow<'a> {
     pub columns: &'a [u8],
 }
 
-impl Message for DataRow<'_> {}
-
 impl<'a> BackendMessage<'a> for DataRow<'a> {
     const PREFIX: u8 = b'D';
 
@@ -381,10 +330,6 @@ impl<'a> BackendMessage<'a> for DataRow<'a> {
 /// https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-SYNC
 pub struct Sync;
 
-impl Message for Sync {
-    const SIZE: Option<i32> = Some(4);
-}
-
 impl FrontendMessage for Sync {
     const PREFIX: Option<u8> = Some(b'S');
 
@@ -397,10 +342,6 @@ impl FrontendMessage for Sync {
 
 /// https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-TERMINATE
 pub struct Terminate;
-
-impl Message for Terminate {
-    const SIZE: Option<i32> = Some(4);
-}
 
 impl FrontendMessage for Terminate {
     const PREFIX: Option<u8> = Some(b'X');
