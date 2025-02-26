@@ -1,5 +1,6 @@
 use std::io::Result;
 use std::iter::FusedIterator;
+use std::marker::PhantomData;
 use std::mem::transmute;
 
 use futures::FutureExt;
@@ -10,7 +11,7 @@ use messages::{
 };
 use util::{read_i32, read_slice, unexpected_message_prefix};
 
-use crate::types::FromQueryResult;
+use crate::types::{FromQueryResult, FromRow, QueryResult};
 
 mod impls;
 mod messages;
@@ -178,12 +179,32 @@ impl<T: Transport> Connection<T> {
         })
     }
 
+    /// Waits for a ReadyForQuery
+    async fn get_ready(&mut self) -> Result<()> {
+        if self.ready {
+            return Ok(());
+        }
+
+        loop {
+            let msg = self.transport.receive_one().await?;
+            match msg.prefix() {
+                ReadyForQuery::PREFIX => {
+                    self.ready = true;
+                    return Ok(());
+                }
+                CommandComplete::PREFIX | EmptyQueryResponse::PREFIX | DataRow::PREFIX => (),
+                n => return Err(unexpected_message_prefix(n)),
+            }
+        }
+    }
+
     pub async fn query<'a, R, U>(
         &'a mut self,
         statement: &str,
         params: impl Fn(&mut Vec<u8>) -> Result<()>,
     ) -> Result<U>
     where
+        R: QueryResult,
         U: FromQueryResult<'a, R, T>,
     {
         self.get_ready().await?;
@@ -212,31 +233,13 @@ impl<T: Transport> Connection<T> {
             n => return Err(unexpected_message_prefix(n)),
         }
 
-        U::from_stream(RowsStream::new(self)).await
+        U::from_stream(QueryStream::<R::Row, U::Row, T>::new(self)).await
     }
 
-    /// Waits for a ReadyForQuery
-    async fn get_ready(&mut self) -> Result<()> {
-        if self.ready {
-            return Ok(());
-        }
-
-        loop {
-            let msg = self.transport.receive_one().await?;
-            match msg.prefix() {
-                ReadyForQuery::PREFIX => {
-                    self.ready = true;
-                    return Ok(());
-                }
-                CommandComplete::PREFIX | EmptyQueryResponse::PREFIX | DataRow::PREFIX => (),
-                n => return Err(unexpected_message_prefix(n)),
-            }
-        }
-    }
-}
-
-impl<T: SyncTransport> Connection<T> {
-    pub fn connnect_sync(config: &Config) -> Result<Self> {
+    pub fn connnect_sync(config: &Config) -> Result<Self>
+    where
+        T: SyncTransport,
+    {
         Self::connect(config)
             .now_or_never()
             .expect("transport should be sync")
@@ -248,7 +251,9 @@ impl<T: SyncTransport> Connection<T> {
         params: impl Fn(&mut Vec<u8>) -> Result<()>,
     ) -> Result<U::SyncOutput>
     where
+        R: QueryResult,
         U: FromQueryResult<'a, R, T>,
+        T: SyncTransport,
     {
         self.query(statement, params)
             .now_or_never()
@@ -261,26 +266,41 @@ impl<T: SyncTransport> Connection<T> {
 ///
 /// # Why is this not a regular [`Stream`](futures::stream::Stream)?
 ///
-/// Rows returned by [`RowsStream`] hold a reference to the buffer that
+/// Values returned by [`QueryStream`] hold a reference to the buffer that
 /// is inside the underlying [`Connection`]. This pattern in rust is
 /// called a "lending iterator", or "streaming interator" and is not
 /// well supported by the Rust ecosystem.
 #[repr(transparent)]
-pub struct RowsStream<T>(Connection<T>);
+pub struct QueryStream<R, U, T>(Connection<T>, PhantomData<(R, U)>);
 
-impl<T: Transport> RowsStream<T> {
-    fn new(conn: &mut Connection<T>) -> &mut Self {
-        // SAFETY: `RowsStream<T>` is a `transparent` wrapper over a `Connection<T>`,
+impl<'a, R, U: FromRow<'a, R>, T: Transport> QueryStream<R, U, T> {
+    fn new(stream: &mut Connection<T>) -> &mut Self {
+        // SAFETY: `QueryStream<R, U, T>` is a `transparent` wrapper over a `Connection<T>`,
         // it is therefore safe to transmute a mutable reference of one into a
         // mutable reference of the other.
-        unsafe { transmute::<&mut Connection<T>, &mut RowsStream<T>>(conn) }
+        unsafe { transmute::<&mut Connection<T>, &mut QueryStream<R, U, T>>(stream) }
     }
 
-    pub async fn next(&mut self) -> Result<Option<Row>> {
+    pub async fn next(&'a mut self) -> Result<Option<U>> {
         let msg = self.0.transport.receive_one().await?;
         match msg.prefix() {
             CommandComplete::PREFIX | EmptyQueryResponse::PREFIX => Ok(None),
-            DataRow::PREFIX => Ok(Some(Row { inner: msg.read()? })),
+            DataRow::PREFIX => {
+                let row = Row { inner: msg.read()? };
+                U::from_row(row).map(Some)
+            },
+            n => Err(unexpected_message_prefix(n)),
+        }
+    }
+
+    pub async fn next_sync(&'a mut self) -> Result<Option<U>>
+    where
+        T: SyncTransport,
+    {
+        let msg = self.0.transport.receive_one().await?;
+        match msg.prefix() {
+            CommandComplete::PREFIX | EmptyQueryResponse::PREFIX => Ok(None),
+            DataRow::PREFIX => U::from_row(Row { inner: msg.read()? }).map(Some),
             n => Err(unexpected_message_prefix(n)),
         }
     }
@@ -289,5 +309,5 @@ impl<T: Transport> RowsStream<T> {
 #[cfg(any(feature = "bb8", feature = "deadpool", feature = "r2d2"))]
 pub struct ConnectionManager<T> {
     config: Config,
-    _marker: std::marker::PhantomData<fn(T)>, 
+    _marker: std::marker::PhantomData<fn(T)>,
 }
