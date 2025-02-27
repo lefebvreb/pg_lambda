@@ -153,7 +153,6 @@ impl<R> QueryResult for SetOf<R> {
 
 // ----------------- FromQueryResult
 
-// See: https://github.com/rust-lang/rust/issues/87479
 pub trait FromQueryResult<'a, R: QueryResult, T: Transport>: Sized + 'a {
     type Row: FromRow<'a, R::Row>;
 
@@ -190,12 +189,10 @@ impl<'a, R, U: FromRow<'a, R>, T: Transport> FromQueryResult<'a, Single<R>, T> f
     }
 }
 
-impl<R, U: for<'x> FromRow<'x, R>, T: Transport> FromQueryResult<'_, SetOf<R>, T>
-    for Vec<U>
-{
+impl<R, U: for<'x> FromRow<'x, R>, T: Transport> FromQueryResult<'_, SetOf<R>, T> for Vec<U> {
     type Row = U;
 
-    type SyncOutput = Self;
+    type SyncOutput = Vec<U>;
 
     async fn from_stream(stream: &mut QueryStream<R, U, T>) -> Result<Self> {
         let mut res = Vec::new();
@@ -206,7 +203,9 @@ impl<R, U: for<'x> FromRow<'x, R>, T: Transport> FromQueryResult<'_, SetOf<R>, T
     }
 }
 
-impl<'a, R, U: FromRow<'a, R>, T: Transport> FromQueryResult<'a, SetOf<R>, T> for &'a mut QueryStream<R, U, T> {
+impl<'a, R, U: FromRow<'a, R>, T: Transport> FromQueryResult<'a, SetOf<R>, T>
+    for &'a mut QueryStream<R, U, T>
+{
     type Row = U;
 
     type SyncOutput = Self;

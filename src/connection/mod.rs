@@ -288,7 +288,7 @@ impl<'a, R, U: FromRow<'a, R>, T: Transport> QueryStream<R, U, T> {
             DataRow::PREFIX => {
                 let row = Row { inner: msg.read()? };
                 U::from_row(row).map(Some)
-            },
+            }
             n => Err(unexpected_message_prefix(n)),
         }
     }
