@@ -6,15 +6,15 @@ use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::token::Paren;
 use syn::{
-    Attribute, Ident, LitStr, Result, Token, Type, TypePath, Visibility, braced, parenthesized,
+    braced, parenthesized, Attribute, Expr, ExprPath, Ident, LitStr, Path, Result, Token, Type, TypePath, Visibility
 };
 
-use crate::util;
+use crate::{query_params, util};
 
 struct LambdaArg {
     ident: Ident,
     colon_token: Token![:],
-    ty: Box<Type>,
+    ty: Type,
 }
 
 impl Parse for LambdaArg {
@@ -29,7 +29,7 @@ impl Parse for LambdaArg {
 
 enum ReturnType {
     Default,
-    Type(Box<Type>),
+    Type(Type),
     Table(Punctuated<LambdaArg, Token![,]>),
 }
 
@@ -39,8 +39,8 @@ impl Parse for ReturnType {
             return Ok(Self::Default);
         }
         input.parse::<Token![->]>()?;
-        let ty = input.parse::<Box<Type>>()?;
-        Ok(match ty.as_ref() {
+        let ty = input.parse::<Type>()?;
+        Ok(match ty {
             Type::Path(TypePath { path, .. }) if path.is_ident("Table") => {
                 let content;
                 braced!(content in input);
@@ -191,35 +191,37 @@ pub fn main(input: TokenStream) -> Result<TokenStream2> {
             }
         };
 
-        let output = quote!(-> #macro_util::PgLambda<impl #macro_util::Fn(&mut #macro_util::Vec<u8>) -> #macro_util::Result<()> + #lifetime, #ret>);
+        let output = quote!(-> #macro_util::PgLambda<impl #macro_util::QueryParams + #lifetime, #ret>);
 
         let argcount = inputs.len() as i32;
 
-        let write_args = inputs.iter().map(|LambdaArg { ident, .. }| {
-            quote! {
-                #macro_util::write_arg(#ident, dst)?;
-            }
-        });
+        let params = query_params::from_expr_type_pairs(
+            &macro_util, 
+            inputs.iter().map(|LambdaArg { ident, ty, .. }| {
+                let ty = ty.clone();
+                let expr = Expr::Path(ExprPath {
+                    attrs: Vec::new(),
+                    qself: None,
+                    path: Path::from(ident.clone()),
+                });
+                (ty, expr)
+            }).collect()
+        );
 
         let inputs = inputs.iter().map(
             |LambdaArg {
                  ident,
                  colon_token,
                  ty,
-             }| quote!(#ident #colon_token &#lifetime impl #macro_util::ToPgValue<#ty>),
+             }| {
+                quote!(#ident #colon_token &#lifetime impl #macro_util::ToPgValue<#ty>,)
+            },
         );
 
         tokens.push(quote! {
             #(#attrs)*
-            #vis #fn_token #ident #generics (#(#inputs,)*) #output {
-                #macro_util::new_lambda(
-                    #select_statement,
-                    |dst: &mut _| {
-                        #macro_util::write_argcount(#argcount, dst);
-                        #(#write_args)*
-                        Ok(())
-                    },
-                )
+            #vis #fn_token #ident #generics (#(#inputs)*) #output {
+                #macro_util::new_lambda(#select_statement, #params)
             }
 
             #macro_util::submit! {

@@ -4,12 +4,12 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::format_ident;
 use syn::{Ident, Result};
 
-const CRATE_NAME: &str = "pg_lambda";
+const MAIN_CRATE_NAME: &str = "pg_lambda";
 
 pub fn crate_ident() -> Ident {
-    match proc_macro_crate::crate_name(CRATE_NAME) {
+    match proc_macro_crate::crate_name(MAIN_CRATE_NAME) {
         Ok(FoundCrate::Name(name)) => format_ident!("{name}"),
-        _ => format_ident!("{CRATE_NAME}"),
+        _ => format_ident!("{MAIN_CRATE_NAME}"),
     }
 }
 

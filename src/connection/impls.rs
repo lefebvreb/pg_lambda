@@ -50,6 +50,7 @@ impl<T: TransportSend + 'static> bb8::ManageConnection for super::ConnectionMana
     }
 
     async fn is_valid(&self, _: &mut Self::Connection) -> Result<()> {
+        // conn.query::<Void, ()>("", NoParams)
         Ok(())
     }
 

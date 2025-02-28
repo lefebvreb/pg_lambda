@@ -6,12 +6,15 @@ pg_lambda! {
         RETURN QUERY SELECT "x" * 2;
     "#
 
-    pub fn procedure1() r#"
+    // pub fn procedure1() r#"
 
-    "#
+    // "#
 
     // pub fn procedure2() r#""#
 }
+
+// Recursive expansion of pg_lambda! macro
+// ========================================
 
 #[test]
 fn lambda() {

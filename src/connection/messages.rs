@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::ffi::CStr;
 use std::io::{Error, ErrorKind, Result};
 
+use super::params::QueryParams;
 use super::util::*;
 
 // https://www.postgresql.org/docs/current/protocol.html
@@ -47,13 +48,13 @@ pub const PROTOCOL_VERSION: i32 = 196608;
 pub trait BackendMessage<'a>: Sized {
     const PREFIX: u8;
 
-    fn read(src: &mut &'a [u8]) -> Result<Self>;
+    fn read(src: &'a [u8]) -> Result<Self>;
 }
 
 pub trait FrontendMessage {
     const PREFIX: Option<u8> = None;
 
-    fn write(&self, dst: &mut Vec<u8>) -> Result<()>;
+    fn write(self, dst: &mut Vec<u8>) -> Result<()>;
 }
 
 // COMMON
@@ -66,16 +67,16 @@ pub struct ErrorResponse<'a> {
 impl<'a> BackendMessage<'a> for ErrorResponse<'a> {
     const PREFIX: u8 = b'E';
 
-    fn read(src: &mut &'a [u8]) -> Result<Self> {
+    fn read(mut src: &'a [u8]) -> Result<Self> {
         let mut this = Self {
             fields: HashMap::new(),
         };
         loop {
-            let field = read_u8(src)?;
+            let field = read_u8(&mut src)?;
             if field == 0 {
                 break;
             }
-            this.fields.insert(field as char, read_cstr(src)?);
+            this.fields.insert(field as char, read_cstr(&mut src)?);
         }
         Ok(this)
     }
@@ -89,16 +90,16 @@ pub struct NoticeResponse<'a> {
 impl<'a> BackendMessage<'a> for NoticeResponse<'a> {
     const PREFIX: u8 = b'N';
 
-    fn read(src: &mut &'a [u8]) -> Result<Self> {
+    fn read(mut src: &'a [u8]) -> Result<Self> {
         let mut this = Self {
             fields: HashMap::new(),
         };
         loop {
-            let field = read_u8(src)?;
+            let field = read_u8(&mut src)?;
             if field == 0 {
                 break;
             }
-            this.fields.insert(field as char, read_cstr(src)?);
+            this.fields.insert(field as char, read_cstr(&mut src)?);
         }
         Ok(this)
     }
@@ -114,8 +115,8 @@ pub enum ReadyForQuery {
 impl BackendMessage<'_> for ReadyForQuery {
     const PREFIX: u8 = b'T';
 
-    fn read(src: &mut &[u8]) -> Result<Self> {
-        Ok(match read_u8(src)? {
+    fn read(mut src: &[u8]) -> Result<Self> {
+        Ok(match read_u8(&mut src)? {
             b'I' => Self::Idle,
             b'T' => Self::Transaction,
             b'E' => Self::FailedTransaction,
@@ -138,7 +139,7 @@ pub struct StartupMessage<'a> {
 }
 
 impl FrontendMessage for StartupMessage<'_> {
-    fn write(&self, dst: &mut Vec<u8>) -> Result<()> {
+    fn write(self, dst: &mut Vec<u8>) -> Result<()> {
         write_i32(PROTOCOL_VERSION, dst);
         write_cstr(c"user", dst);
         write_str(self.user, dst)?;
@@ -157,8 +158,8 @@ pub enum Authentication {
 impl<'a> BackendMessage<'a> for Authentication {
     const PREFIX: u8 = b'R';
 
-    fn read(src: &mut &'a [u8]) -> Result<Self> {
-        match read_i32(src)? {
+    fn read(mut src: &'a [u8]) -> Result<Self> {
+        match read_i32(&mut src)? {
             0 => Ok(Self::Ok),
             n => Err(Error::new(
                 ErrorKind::Unsupported,
@@ -177,12 +178,12 @@ pub struct NegotiateProtocolVersion<'a> {
 impl<'a> BackendMessage<'a> for NegotiateProtocolVersion<'a> {
     const PREFIX: u8 = b'v';
 
-    fn read(src: &mut &'a [u8]) -> Result<Self> {
-        let min_supported = read_i32(src)?;
-        let n = read_i32(src)?;
+    fn read(mut src: &'a [u8]) -> Result<Self> {
+        let min_supported = read_i32(&mut src)?;
+        let n = read_i32(&mut src)?;
         let mut unsupported = Vec::with_capacity(n as usize);
         for _ in 0..n {
-            unsupported.push(read_cstr(src)?);
+            unsupported.push(read_cstr(&mut src)?);
         }
         Ok(Self {
             min_supported,
@@ -197,7 +198,7 @@ pub struct BackendKeyData;
 impl BackendMessage<'_> for BackendKeyData {
     const PREFIX: u8 = b'K';
 
-    fn read(_: &mut &[u8]) -> Result<Self> {
+    fn read(_: &[u8]) -> Result<Self> {
         Ok(Self)
     }
 }
@@ -208,7 +209,7 @@ pub struct ParameterStatus;
 impl BackendMessage<'_> for ParameterStatus {
     const PREFIX: u8 = b'S';
 
-    fn read(_: &mut &[u8]) -> Result<Self> {
+    fn read(_: &[u8]) -> Result<Self> {
         Ok(Self)
     }
 }
@@ -223,7 +224,7 @@ pub struct Parse<'a> {
 impl FrontendMessage for Parse<'_> {
     const PREFIX: Option<u8> = Some(b'P');
 
-    fn write(&self, dst: &mut Vec<u8>) -> Result<()> {
+    fn write(self, dst: &mut Vec<u8>) -> Result<()> {
         write_cstr(c"", dst);
         write_str(self.query, dst)?;
         write_i16(0, dst);
@@ -237,28 +238,28 @@ pub struct ParseComplete;
 impl BackendMessage<'_> for ParseComplete {
     const PREFIX: u8 = b'1';
 
-    fn read(_: &mut &[u8]) -> Result<Self> {
+    fn read(_: &[u8]) -> Result<Self> {
         Ok(Self)
     }
 }
 
 /// https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-BIND
-pub struct Bind<F> {
-    pub params: F,
+pub struct Bind<P> {
+    pub params: P,
 }
 
-impl<F> FrontendMessage for Bind<F>
+impl<P> FrontendMessage for Bind<P>
 where
-    F: Fn(&mut Vec<u8>) -> Result<()>,
+    P: QueryParams,
 {
     const PREFIX: Option<u8> = Some(b'B');
 
-    fn write(&self, dst: &mut Vec<u8>) -> Result<()> {
+    fn write(self, dst: &mut Vec<u8>) -> Result<()> {
         write_cstr(c"", dst);
         write_cstr(c"", dst);
         write_i16(1, dst);
         write_i16(1, dst);
-        (self.params)(dst)?;
+        self.params.write(dst)?;
         write_i16(1, dst);
         write_i16(1, dst);
         Ok(())
@@ -271,7 +272,7 @@ pub struct BindComplete;
 impl BackendMessage<'_> for BindComplete {
     const PREFIX: u8 = b'2';
 
-    fn read(_: &mut &[u8]) -> Result<Self> {
+    fn read(_: &[u8]) -> Result<Self> {
         Ok(Self)
     }
 }
@@ -282,7 +283,7 @@ pub struct Execute;
 impl FrontendMessage for Execute {
     const PREFIX: Option<u8> = Some(b'E');
 
-    fn write(&self, dst: &mut Vec<u8>) -> Result<()> {
+    fn write(self, dst: &mut Vec<u8>) -> Result<()> {
         write_cstr(c"", dst);
         write_i32(0, dst);
         Ok(())
@@ -295,7 +296,7 @@ pub struct EmptyQueryResponse;
 impl BackendMessage<'_> for EmptyQueryResponse {
     const PREFIX: u8 = b'I';
 
-    fn read(_: &mut &[u8]) -> Result<Self> {
+    fn read(_: &[u8]) -> Result<Self> {
         Ok(Self)
     }
 }
@@ -306,7 +307,7 @@ pub struct CommandComplete;
 impl BackendMessage<'_> for CommandComplete {
     const PREFIX: u8 = b'C';
 
-    fn read(_: &mut &[u8]) -> Result<Self> {
+    fn read(_: &[u8]) -> Result<Self> {
         Ok(Self)
     }
 }
@@ -320,9 +321,9 @@ pub struct DataRow<'a> {
 impl<'a> BackendMessage<'a> for DataRow<'a> {
     const PREFIX: u8 = b'D';
 
-    fn read(src: &mut &'a [u8]) -> Result<Self> {
-        let len = read_i16(src)?;
-        let columns = read_slice(len as i32, src)?;
+    fn read(mut src: &'a [u8]) -> Result<Self> {
+        let len = read_i16(&mut src)?;
+        let columns = read_slice(len as i32, &mut src)?;
         Ok(Self { len, columns })
     }
 }
@@ -333,7 +334,7 @@ pub struct Sync;
 impl FrontendMessage for Sync {
     const PREFIX: Option<u8> = Some(b'S');
 
-    fn write(&self, _: &mut Vec<u8>) -> Result<()> {
+    fn write(self, _: &mut Vec<u8>) -> Result<()> {
         Ok(())
     }
 }
@@ -346,7 +347,7 @@ pub struct Terminate;
 impl FrontendMessage for Terminate {
     const PREFIX: Option<u8> = Some(b'X');
 
-    fn write(&self, _: &mut Vec<u8>) -> Result<()> {
+    fn write(self, _: &mut Vec<u8>) -> Result<()> {
         Ok(())
     }
 }

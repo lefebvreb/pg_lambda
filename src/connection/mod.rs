@@ -1,6 +1,5 @@
 use std::convert::identity;
 use std::io::{Error, Result};
-use std::iter::FusedIterator;
 use std::marker::PhantomData;
 use std::mem::transmute;
 use std::ops::Range;
@@ -11,35 +10,15 @@ use messages::{
     EmptyQueryResponse, ErrorResponse, Execute, FrontendMessage, NegotiateProtocolVersion,
     NoticeResponse, ParameterStatus, Parse, ParseComplete, ReadyForQuery, StartupMessage, Sync,
 };
-use util::{read_i32, read_slice, unexpected_message_prefix};
-
-use crate::types::{FromQueryResult, FromRow, QueryResult};
+use params::QueryParams;
+use result::{FromQueryResult, FromRow, QueryResult, Row};
+use util::unexpected_message_prefix;
 
 mod impls;
 mod messages;
+pub mod params;
+pub mod result;
 mod util;
-
-pub struct Row<'a> {
-    inner: DataRow<'a>,
-}
-
-impl<'a> Iterator for Row<'a> {
-    type Item = Result<Option<&'a [u8]>>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.inner.len == 0 {
-            return None;
-        }
-        self.inner.len -= 1;
-        Some(match read_i32(&mut self.inner.columns) {
-            Ok(-1) => Ok(None),
-            Ok(len) => read_slice(len, &mut self.inner.columns).map(Some),
-            Err(err) => Err(err),
-        })
-    }
-}
-
-impl FusedIterator for Row<'_> {}
 
 // todo: add a config for max connection buffer size, and implement a mechanism to shrink buffers than get too large.
 pub struct Config {
@@ -88,17 +67,19 @@ impl MessageWriter<'_> {
 
 struct AnyMessage {
     prefix: u8,
-    range: Range<usize>,
+    body: Range<usize>,
 }
 
 struct BufferedTransport<T> {
     transport: T,
     stack: Vec<u8>,
+    checkpoint: usize,
 }
 
 impl<T: Transport> BufferedTransport<T> {
     async fn send(&mut self, f: impl FnOnce(MessageWriter) -> Result<()>) -> Result<()> {
         let start = self.stack.len();
+        self.checkpoint = start;
         f(MessageWriter {
             stack: &mut self.stack,
         })
@@ -115,8 +96,7 @@ impl<T: Transport> BufferedTransport<T> {
                 .read_exact(5, &mut self.stack)
                 .await
                 .inspect_err(|_| self.stack.truncate(start))?;
-            let range = (start + 1)..(start + 5);
-            let size = i32::from_be_bytes(self.stack[range.clone()].try_into().unwrap());
+            let size = i32::from_be_bytes(self.stack[(start + 1)..(start + 5)].try_into().unwrap());
             self.transport
                 .read_exact(size, &mut self.stack)
                 .await
@@ -137,13 +117,18 @@ impl<T: Transport> BufferedTransport<T> {
                     return Err(err);
                 }
                 NoticeResponse::PREFIX | ParameterStatus::PREFIX => self.stack.truncate(start),
-                prefix => return Ok(AnyMessage { prefix, range }),
+                prefix => {
+                    return Ok(AnyMessage {
+                        prefix,
+                        body: (start + 5)..self.stack.len(),
+                    });
+                }
             }
         }
     }
 
     fn read_message<'a, M: BackendMessage<'a>>(&'a self, msg: &AnyMessage) -> Result<M> {
-        M::read(&mut &self.stack[msg.range.clone()])
+        M::read(&self.stack[msg.body.clone()])
     }
 }
 
@@ -157,6 +142,7 @@ impl<T: Transport> Connection<T> {
         let mut transport = BufferedTransport {
             transport: T::connect(config).await?,
             stack: Vec::new(),
+            checkpoint: 0,
         };
 
         // Send StartupMessage
@@ -195,7 +181,7 @@ impl<T: Transport> Connection<T> {
     pub async fn query<'a, R, U>(
         &'a mut self,
         statement: &str,
-        params: impl Fn(&mut Vec<u8>) -> Result<()>,
+        params: impl QueryParams,
     ) -> Result<U>
     where
         R: QueryResult,
@@ -264,7 +250,7 @@ impl<T: Transport> Connection<T> {
     pub fn query_sync<'a, R, U>(
         &'a mut self,
         statement: &str,
-        params: impl Fn(&mut Vec<u8>) -> Result<()>,
+        params: impl QueryParams,
     ) -> Result<U>
     where
         R: QueryResult,
@@ -274,7 +260,6 @@ impl<T: Transport> Connection<T> {
         self.query(statement, params)
             .now_or_never()
             .expect("transport should be sync")
-            .map(From::from)
     }
 
     pub fn recycle_sync(&mut self) -> Result<()>
