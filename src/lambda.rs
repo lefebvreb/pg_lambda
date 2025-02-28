@@ -35,7 +35,7 @@ where
         conn.query(self.statement, self.params).await
     }
 
-    pub fn call_sync<'a, U, T>(self, conn: &'a mut Connection<T>) -> Result<U::SyncOutput>
+    pub fn call_sync<'a, U, T>(self, conn: &'a mut Connection<T>) -> Result<U>
     where
         U: FromQueryResult<'a, R, T>,
         T: SyncTransport,

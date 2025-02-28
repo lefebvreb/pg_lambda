@@ -156,16 +156,12 @@ impl<R> QueryResult for SetOf<R> {
 pub trait FromQueryResult<'a, R: QueryResult, T: Transport>: Sized + 'a {
     type Row: FromRow<'a, R::Row>;
 
-    type SyncOutput: From<Self>;
-
     #[allow(async_fn_in_trait)]
     async fn from_stream(stream: &'a mut QueryStream<R::Row, Self::Row, T>) -> Result<Self>;
 }
 
 impl<T: Transport> FromQueryResult<'_, Void, T> for () {
     type Row = ();
-
-    type SyncOutput = ();
 
     async fn from_stream(_: &mut QueryStream<(), (), T>) -> Result<Self> {
         Ok(())
@@ -174,8 +170,6 @@ impl<T: Transport> FromQueryResult<'_, Void, T> for () {
 
 impl<'a, R, U: FromRow<'a, R>, T: Transport> FromQueryResult<'a, Single<R>, T> for U {
     type Row = U;
-
-    type SyncOutput = U;
 
     async fn from_stream(stream: &'a mut QueryStream<R, U, T>) -> Result<Self> {
         // todo: figure out a way to pull the first None that comes right after this
@@ -192,8 +186,6 @@ impl<'a, R, U: FromRow<'a, R>, T: Transport> FromQueryResult<'a, Single<R>, T> f
 impl<R, U: for<'x> FromRow<'x, R>, T: Transport> FromQueryResult<'_, SetOf<R>, T> for Vec<U> {
     type Row = U;
 
-    type SyncOutput = Vec<U>;
-
     async fn from_stream(stream: &mut QueryStream<R, U, T>) -> Result<Self> {
         let mut res = Vec::new();
         while let Some(val) = stream.next().await? {
@@ -207,8 +199,6 @@ impl<'a, R, U: FromRow<'a, R>, T: Transport> FromQueryResult<'a, SetOf<R>, T>
     for &'a mut QueryStream<R, U, T>
 {
     type Row = U;
-
-    type SyncOutput = Self;
 
     async fn from_stream(stream: &'a mut QueryStream<R, U, T>) -> Result<Self> {
         Ok(stream)

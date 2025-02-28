@@ -1,7 +1,9 @@
-use std::io::Result;
+use std::convert::identity;
+use std::io::{Error, Result};
 use std::iter::FusedIterator;
 use std::marker::PhantomData;
 use std::mem::transmute;
+use std::ops::Range;
 
 use futures::FutureExt;
 use messages::{
@@ -35,33 +37,9 @@ impl<'a> Iterator for Row<'a> {
             Err(err) => Err(err),
         })
     }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let len = self.len();
-        (len, Some(len))
-    }
-}
-
-impl ExactSizeIterator for Row<'_> {
-    fn len(&self) -> usize {
-        self.inner.len as usize
-    }
 }
 
 impl FusedIterator for Row<'_> {}
-
-struct AnyMessage<'a>(&'a [u8]);
-
-impl<'a> AnyMessage<'a> {
-    fn prefix(&self) -> u8 {
-        self.0[0]
-    }
-
-    fn read<M: BackendMessage<'a>>(&self) -> Result<M> {
-        let mut src = &self.0[5..];
-        M::read(&mut src)
-    }
-}
 
 // todo: add a config for max connection buffer size, and implement a mechanism to shrink buffers than get too large.
 pub struct Config {
@@ -88,17 +66,12 @@ pub trait Transport: Sized {
 /// synchronous context.
 pub trait SyncTransport: Transport {}
 
-struct BufferedTransport<T> {
-    transport: T,
-    stack: Vec<u8>,
+struct MessageWriter<'a> {
+    stack: &'a mut Vec<u8>,
 }
 
-impl<T: Transport> BufferedTransport<T> {
-    fn clear(&mut self) {
-        self.stack.clear();
-    }
-
-    fn write_one<M: FrontendMessage>(&mut self, msg: M) -> Result<()> {
+impl MessageWriter<'_> {
+    fn add<M: FrontendMessage>(mut self, msg: M) -> Result<Self> {
         if let Some(byte) = M::PREFIX {
             self.stack.push(byte);
         }
@@ -109,32 +82,68 @@ impl<T: Transport> BufferedTransport<T> {
         let size = (self.stack.len() - start) as i32;
         self.stack[start..start + 4].copy_from_slice(&size.to_be_bytes());
 
-        Ok(())
+        Ok(self)
+    }
+}
+
+struct AnyMessage {
+    prefix: u8,
+    range: Range<usize>,
+}
+
+struct BufferedTransport<T> {
+    transport: T,
+    stack: Vec<u8>,
+}
+
+impl<T: Transport> BufferedTransport<T> {
+    async fn send(&mut self, f: impl FnOnce(MessageWriter) -> Result<()>) -> Result<()> {
+        let start = self.stack.len();
+        f(MessageWriter {
+            stack: &mut self.stack,
+        })
+        .inspect_err(|_| self.stack.truncate(start))?;
+        let res = self.transport.write_all(&self.stack).await;
+        self.stack.truncate(start);
+        res
     }
 
-    async fn send_all(&mut self) -> Result<()> {
-        self.transport.write_all(&self.stack).await
-    }
-
-    async fn receive_one(&mut self) -> Result<AnyMessage> {
+    async fn receive_any(&mut self) -> Result<AnyMessage> {
         loop {
-            self.stack.clear();
-            self.transport.read_exact(5, &mut self.stack).await?;
-            let size = i32::from_be_bytes(self.stack[1..5].try_into().unwrap());
-            self.transport.read_exact(size, &mut self.stack).await?;
+            let start = self.stack.len();
+            self.transport
+                .read_exact(5, &mut self.stack)
+                .await
+                .inspect_err(|_| self.stack.truncate(start))?;
+            let range = (start + 1)..(start + 5);
+            let size = i32::from_be_bytes(self.stack[range.clone()].try_into().unwrap());
+            self.transport
+                .read_exact(size, &mut self.stack)
+                .await
+                .inspect_err(|_| self.stack.truncate(start))?;
 
             // todo: enhance error and warning reportings.
-            match self.stack[0] {
+            match self.stack[start] {
                 ErrorResponse::PREFIX => {
-                    return Err(ErrorResponse::read(&mut self.stack.as_slice())?.into());
+                    let err = ErrorResponse::read(&mut self.stack.as_slice())
+                        .map_or_else(identity, Error::from);
+                    self.stack.truncate(start);
+                    return Err(err);
                 }
                 NegotiateProtocolVersion::PREFIX => {
-                    return Err(NegotiateProtocolVersion::read(&mut self.stack.as_slice())?.into());
+                    let err = NegotiateProtocolVersion::read(&mut self.stack.as_slice())
+                        .map_or_else(identity, Error::from);
+                    self.stack.truncate(start);
+                    return Err(err);
                 }
-                NoticeResponse::PREFIX | ParameterStatus::PREFIX => (),
-                _ => return Ok(AnyMessage(&self.stack)),
+                NoticeResponse::PREFIX | ParameterStatus::PREFIX => self.stack.truncate(start),
+                prefix => return Ok(AnyMessage { prefix, range }),
             }
         }
+    }
+
+    fn read_message<'a, M: BackendMessage<'a>>(&'a self, msg: &AnyMessage) -> Result<M> {
+        M::read(&mut &self.stack[msg.range.clone()])
     }
 }
 
@@ -151,24 +160,28 @@ impl<T: Transport> Connection<T> {
         };
 
         // Send StartupMessage
-        transport.write_one(StartupMessage {
-            user: &config.user,
-            database: &config.database,
-        })?;
-        transport.send_all().await?;
+        transport
+            .send(|writer| {
+                writer.add(StartupMessage {
+                    user: &config.user,
+                    database: &config.database,
+                })?;
+                Ok(())
+            })
+            .await?;
 
         // Wait for Authenticate
-        let msg = transport.receive_one().await?;
-        match msg.prefix() {
-            Authentication::PREFIX => match msg.read::<Authentication>()? {
+        let msg = transport.receive_any().await?;
+        match msg.prefix {
+            Authentication::PREFIX => match transport.read_message::<Authentication>(&msg)? {
                 Authentication::Ok => (),
             },
             n => return Err(unexpected_message_prefix(n)),
         }
 
         // Wait for BackendKeyData
-        let msg = transport.receive_one().await?;
-        match msg.prefix() {
+        let msg = transport.receive_any().await?;
+        match msg.prefix {
             BackendKeyData::PREFIX => (),
             n => return Err(unexpected_message_prefix(n)),
         };
@@ -177,25 +190,6 @@ impl<T: Transport> Connection<T> {
             transport,
             ready: false,
         })
-    }
-
-    /// Waits for a ReadyForQuery
-    async fn get_ready(&mut self) -> Result<()> {
-        if self.ready {
-            return Ok(());
-        }
-
-        loop {
-            let msg = self.transport.receive_one().await?;
-            match msg.prefix() {
-                ReadyForQuery::PREFIX => {
-                    self.ready = true;
-                    return Ok(());
-                }
-                CommandComplete::PREFIX | EmptyQueryResponse::PREFIX | DataRow::PREFIX => (),
-                n => return Err(unexpected_message_prefix(n)),
-            }
-        }
     }
 
     pub async fn query<'a, R, U>(
@@ -207,33 +201,55 @@ impl<T: Transport> Connection<T> {
         R: QueryResult,
         U: FromQueryResult<'a, R, T>,
     {
-        self.get_ready().await?;
+        self.recycle().await?;
 
         // Send Parse, Bind, Execute and Sync to start the query
-        self.transport.clear();
-        self.transport.write_one(Parse { query: statement })?;
-        self.transport.write_one(Bind { params })?;
-        self.transport.write_one(Execute)?;
-        self.transport.write_one(Sync)?;
-        self.transport.send_all().await?;
+        self.transport
+            .send(|writer| {
+                writer
+                    .add(Parse { query: statement })?
+                    .add(Bind { params })?
+                    .add(Execute)?
+                    .add(Sync)?;
+                Ok(())
+            })
+            .await?;
 
         self.ready = false;
 
         // Waits for ParseComplete
-        let msg = self.transport.receive_one().await?;
-        match msg.prefix() {
+        let msg = self.transport.receive_any().await?;
+        match msg.prefix {
             ParseComplete::PREFIX => (),
             n => return Err(unexpected_message_prefix(n)),
         }
 
         // Waits for BindComplete
-        let msg = self.transport.receive_one().await?;
-        match msg.prefix() {
+        let msg = self.transport.receive_any().await?;
+        match msg.prefix {
             BindComplete::PREFIX => (),
             n => return Err(unexpected_message_prefix(n)),
         }
 
         U::from_stream(QueryStream::<R::Row, U::Row, T>::new(self)).await
+    }
+
+    pub async fn recycle(&mut self) -> Result<()> {
+        if self.ready {
+            return Ok(());
+        }
+
+        loop {
+            let msg = self.transport.receive_any().await?;
+            match msg.prefix {
+                ReadyForQuery::PREFIX => {
+                    self.ready = true;
+                    return Ok(());
+                }
+                CommandComplete::PREFIX | EmptyQueryResponse::PREFIX | DataRow::PREFIX => (),
+                n => return Err(unexpected_message_prefix(n)),
+            }
+        }
     }
 
     pub fn connnect_sync(config: &Config) -> Result<Self>
@@ -249,7 +265,7 @@ impl<T: Transport> Connection<T> {
         &'a mut self,
         statement: &str,
         params: impl Fn(&mut Vec<u8>) -> Result<()>,
-    ) -> Result<U::SyncOutput>
+    ) -> Result<U>
     where
         R: QueryResult,
         U: FromQueryResult<'a, R, T>,
@@ -259,6 +275,15 @@ impl<T: Transport> Connection<T> {
             .now_or_never()
             .expect("transport should be sync")
             .map(From::from)
+    }
+
+    pub fn recycle_sync(&mut self) -> Result<()>
+    where
+        T: SyncTransport,
+    {
+        self.recycle()
+            .now_or_never()
+            .expect("transport should be sync")
     }
 }
 
@@ -275,34 +300,33 @@ pub struct QueryStream<R, U, T>(Connection<T>, PhantomData<(R, U)>);
 
 impl<'a, R, U: FromRow<'a, R>, T: Transport> QueryStream<R, U, T> {
     fn new(stream: &mut Connection<T>) -> &mut Self {
-        // SAFETY: `QueryStream<R, U, T>` is a `transparent` wrapper over a `Connection<T>`,
-        // it is therefore safe to transmute a mutable reference of one into a
-        // mutable reference of the other.
+        // SAFETY: `QueryStream<R, U, T>` is a `#[repr(transparent)]` wrapper over
+        // a `Connection<T>`, it is therefore safe to transmute a mutable reference
+        // of one into a mutable reference of the other.
         unsafe { transmute::<&mut Connection<T>, &mut QueryStream<R, U, T>>(stream) }
     }
 
     pub async fn next(&'a mut self) -> Result<Option<U>> {
-        let msg = self.0.transport.receive_one().await?;
-        match msg.prefix() {
+        let msg = self.0.transport.receive_any().await?;
+        match msg.prefix {
             CommandComplete::PREFIX | EmptyQueryResponse::PREFIX => Ok(None),
             DataRow::PREFIX => {
-                let row = Row { inner: msg.read()? };
+                let row = Row {
+                    inner: self.0.transport.read_message(&msg)?,
+                };
                 U::from_row(row).map(Some)
             }
             n => Err(unexpected_message_prefix(n)),
         }
     }
 
-    pub async fn next_sync(&'a mut self) -> Result<Option<U>>
+    pub fn next_sync(&'a mut self) -> Result<Option<U>>
     where
         T: SyncTransport,
     {
-        let msg = self.0.transport.receive_one().await?;
-        match msg.prefix() {
-            CommandComplete::PREFIX | EmptyQueryResponse::PREFIX => Ok(None),
-            DataRow::PREFIX => U::from_row(Row { inner: msg.read()? }).map(Some),
-            n => Err(unexpected_message_prefix(n)),
-        }
+        self.next()
+            .now_or_never()
+            .expect("transport should be sync")
     }
 }
 
