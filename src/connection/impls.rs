@@ -48,13 +48,17 @@ impl<T: TransportSend + 'static> bb8::ManageConnection for super::ConnectionMana
         super::Connection::connect(&self.config).await
     }
 
+    // See: https://github.com/rust-lang/rust/issues/100013
+    // async fn is_valid(&self, conn: &mut Self::Connection) -> Result<()> {
+    //     conn.query::<super::result::Void, ()>("", super::params::NoParams).await
+    // }
+
     async fn is_valid(&self, _: &mut Self::Connection) -> Result<()> {
-        // conn.query::<Void, ()>("", NoParams).await
         Ok(())
     }
 
-    fn has_broken(&self, _: &mut Self::Connection) -> bool {
-        false
+    fn has_broken(&self, conn: &mut Self::Connection) -> bool {
+        conn.is_closed()
     }
 }
 
@@ -70,10 +74,12 @@ impl<T: TransportSend> deadpool::managed::Manager for super::ConnectionManager<T
 
     async fn recycle(
         &self,
-        _: &mut Self::Type,
+        conn: &mut Self::Type,
         _: &deadpool::managed::Metrics,
     ) -> deadpool::managed::RecycleResult<Self::Error> {
-        Ok(())
+        conn.recycle()
+            .await
+            .map_err(deadpool::managed::RecycleError::Backend)
     }
 }
 
@@ -96,7 +102,7 @@ impl<T: TransportSend + SyncTransport + 'static> r2d2::ManageConnection
         conn.query_sync::<super::result::Void, ()>("", super::params::NoParams)
     }
 
-    fn has_broken(&self, _: &mut Self::Connection) -> bool {
-        false
+    fn has_broken(&self, conn: &mut Self::Connection) -> bool {
+        conn.is_closed()
     }
 }

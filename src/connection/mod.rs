@@ -8,7 +8,7 @@ use futures::FutureExt;
 use messages::{
     Authentication, BackendKeyData, BackendMessage, Bind, BindComplete, CommandComplete, DataRow,
     EmptyQueryResponse, ErrorResponse, Execute, NegotiateProtocolVersion, NoticeResponse,
-    ParameterStatus, Parse, ParseComplete, ReadyForQuery, StartupMessage, Sync,
+    ParameterStatus, Parse, ParseComplete, ReadyForQuery, StartupMessage, Sync, Terminate,
 };
 use params::QueryParams;
 use result::{FromQueryResult, FromRow, QueryResult, Row};
@@ -178,6 +178,13 @@ impl<T: Transport> Connection<T> {
         }
     }
 
+    pub async fn terminate(mut self) -> Result<()> {
+        self.buffer
+            .send_all(|mut writer| writer.add(Terminate))
+            .await?;
+        Ok(())
+    }
+
     pub fn connnect_sync(config: &Config) -> Result<Self>
     where
         T: SyncTransport,
@@ -209,6 +216,19 @@ impl<T: Transport> Connection<T> {
         self.recycle()
             .now_or_never()
             .expect("transport should be sync")
+    }
+
+    pub fn terminate_sync(self) -> Result<()> 
+    where
+        T: SyncTransport,
+    {
+        self.terminate()
+            .now_or_never()
+            .expect("transport should be sync")
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.buffer.is_closed()
     }
 }
 

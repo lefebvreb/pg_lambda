@@ -1,8 +1,12 @@
-use std::io::Result;
+use std::io::{Error, ErrorKind, Result};
 use std::ops::Range;
 
 use super::Transport;
 use super::messages::{BackendMessage, FrontendMessage};
+
+fn closed_error() -> Error {
+    Error::new(ErrorKind::UnexpectedEof, "transport was closed")
+}
 
 pub struct MessageWriter<'a> {
     stack: &'a mut Vec<u8>,
@@ -31,6 +35,7 @@ pub struct AnyMessage {
 
 enum State {
     Idle,
+    Closed,
     Sending { total: i32, remaining: i32 },
     ReceivingHead { remaining: i32 },
     ReceivingBody { size: i32, remaining: i32 },
@@ -52,18 +57,25 @@ impl<T: Transport> Buffer<T> {
     }
 
     pub fn clear(&mut self) {
-        match self.state {
-            State::Idle => self.stack.clear(),
-            _ => panic!(),
-        }
+        self.stack.clear();
+    }
+
+    fn on_close(&mut self) -> Error {
+        self.state = State::Closed;
+        closed_error()
+    }
+
+    pub fn is_closed(&self) -> bool {
+        matches!(self.state, State::Closed)
     }
 
     async fn send_bytes(&mut self, total: i32, mut remaining: i32) -> Result<()> {
         loop {
             let range = (self.stack.len() - remaining as usize)..;
-            remaining -= self.transport.write(&self.stack[range]).await?;
-            if remaining == 0 {
-                break;
+            match self.transport.write(&self.stack[range]).await? {
+                0 => return Err(self.on_close()),
+                n if n == remaining => break,
+                n => remaining -= n,
             }
             self.state = State::Sending { total, remaining };
         }
@@ -79,6 +91,7 @@ impl<T: Transport> Buffer<T> {
     ) -> Result<()> {
         match self.state {
             State::Idle => (),
+            State::Closed => return Err(closed_error()),
             State::Sending { total, remaining } => self.send_bytes(total, remaining).await?,
             _ => panic!(),
         }
@@ -107,28 +120,39 @@ impl<T: Transport> Buffer<T> {
     async fn receive_head(&mut self, mut remaining: i32) -> Result<AnyMessage> {
         loop {
             let range = (self.stack.len() - remaining as usize)..;
-            remaining -= self.transport.read(&mut self.stack[range]).await?;
-            if remaining == 0 {
-                break;
+            match self.transport.read(&mut self.stack[range]).await? {
+                0 => return Err(self.on_close()),
+                n if n == remaining => break,
+                n => remaining -= n,
             }
             self.state = State::ReceivingHead { remaining };
         }
 
-        let size = i32::from_be_bytes(self.stack[(self.stack.len() - 4)..].try_into().unwrap());
-        self.state = State::ReceivingBody {
-            size,
-            remaining: size,
-        };
-        self.extend_buffer(size);
-        self.receive_body(size, size).await
+        let size = i32::from_be_bytes(self.stack[(self.stack.len() - 4)..].try_into().unwrap()) - 4;
+
+        if size > 0 {
+            self.state = State::ReceivingBody {
+                size,
+                remaining: size,
+            };
+            self.extend_buffer(size);
+            self.receive_body(size, size).await
+        } else {
+            self.state = State::Idle;
+            Ok(AnyMessage {
+                prefix: self.stack[self.stack.len() - 5],
+                body: Range::default(),
+            })
+        }
     }
 
     async fn receive_body(&mut self, size: i32, mut remaining: i32) -> Result<AnyMessage> {
         loop {
             let range = (self.stack.len() - remaining as usize)..;
-            remaining -= self.transport.read(&mut self.stack[range]).await?;
-            if remaining == 0 {
-                break;
+            match self.transport.read(&mut self.stack[range]).await? {
+                0 => return Err(self.on_close()),
+                n if n == remaining => break,
+                n => remaining -= n,
             }
             self.state = State::ReceivingBody { size, remaining };
         }
@@ -143,6 +167,7 @@ impl<T: Transport> Buffer<T> {
     pub async fn receive_any(&mut self) -> Result<AnyMessage> {
         match self.state {
             State::Idle => (),
+            State::Closed => return Err(closed_error()),
             State::Sending { total, remaining } => self.send_bytes(total, remaining).await?,
             State::ReceivingHead { remaining } => return self.receive_head(remaining).await,
             State::ReceivingBody { size, remaining } => {
