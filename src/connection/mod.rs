@@ -2,18 +2,19 @@ use std::convert::identity;
 use std::io::{Error, Result};
 use std::marker::PhantomData;
 use std::mem::transmute;
-use std::ops::Range;
 
+use buffer::{AnyMessage, Buffer};
 use futures::FutureExt;
 use messages::{
     Authentication, BackendKeyData, BackendMessage, Bind, BindComplete, CommandComplete, DataRow,
-    EmptyQueryResponse, ErrorResponse, Execute, FrontendMessage, NegotiateProtocolVersion,
-    NoticeResponse, ParameterStatus, Parse, ParseComplete, ReadyForQuery, StartupMessage, Sync,
+    EmptyQueryResponse, ErrorResponse, Execute, NegotiateProtocolVersion, NoticeResponse,
+    ParameterStatus, Parse, ParseComplete, ReadyForQuery, StartupMessage, Sync,
 };
 use params::QueryParams;
 use result::{FromQueryResult, FromRow, QueryResult, Row};
 use util::unexpected_message_prefix;
 
+mod buffer;
 mod impls;
 mod messages;
 pub mod params;
@@ -32,9 +33,9 @@ pub trait Transport: Sized {
     // todo: find a way to test multiple addresses
     async fn connect(config: &Config) -> Result<Self>;
 
-    async fn read_exact(&mut self, limit: i32, dst: &mut Vec<u8>) -> Result<()>;
+    async fn read(&mut self, dst: &mut [u8]) -> Result<i32>;
 
-    async fn write_all(&mut self, src: &[u8]) -> Result<()>;
+    async fn write(&mut self, src: &[u8]) -> Result<i32>;
 }
 
 /// Marker trait for [`Transport`] implementations that can be used in synchronous contexts.
@@ -45,137 +46,78 @@ pub trait Transport: Sized {
 /// synchronous context.
 pub trait SyncTransport: Transport {}
 
-struct MessageWriter<'a> {
-    stack: &'a mut Vec<u8>,
+pub struct Connection<T> {
+    buffer: Buffer<T>,
+    ready_for_query: bool,
 }
 
-impl MessageWriter<'_> {
-    fn add<M: FrontendMessage>(mut self, msg: M) -> Result<Self> {
-        if let Some(byte) = M::PREFIX {
-            self.stack.push(byte);
-        }
-
-        let start = self.stack.len();
-        self.stack.extend([0; 4]);
-        msg.write(&mut self.stack)?;
-        let size = (self.stack.len() - start) as i32;
-        self.stack[start..start + 4].copy_from_slice(&size.to_be_bytes());
-
-        Ok(self)
-    }
-}
-
-struct AnyMessage {
-    prefix: u8,
-    body: Range<usize>,
-}
-
-struct BufferedTransport<T> {
-    transport: T,
-    stack: Vec<u8>,
-    checkpoint: usize,
-}
-
-impl<T: Transport> BufferedTransport<T> {
-    async fn send(&mut self, f: impl FnOnce(MessageWriter) -> Result<()>) -> Result<()> {
-        let start = self.stack.len();
-        self.checkpoint = start;
-        f(MessageWriter {
-            stack: &mut self.stack,
-        })
-        .inspect_err(|_| self.stack.truncate(start))?;
-        let res = self.transport.write_all(&self.stack).await;
-        self.stack.truncate(start);
-        res
-    }
-
-    async fn receive_any(&mut self) -> Result<AnyMessage> {
+impl<T: Transport> Connection<T> {
+    async fn receive_unhandled(&mut self) -> Result<AnyMessage> {
         loop {
-            let start = self.stack.len();
-            self.transport
-                .read_exact(5, &mut self.stack)
-                .await
-                .inspect_err(|_| self.stack.truncate(start))?;
-            let size = i32::from_be_bytes(self.stack[(start + 1)..(start + 5)].try_into().unwrap());
-            self.transport
-                .read_exact(size, &mut self.stack)
-                .await
-                .inspect_err(|_| self.stack.truncate(start))?;
-
-            // todo: enhance error and warning reportings.
-            match self.stack[start] {
+            let msg = self.buffer.receive_any().await?;
+            match msg.prefix {
                 ErrorResponse::PREFIX => {
-                    let err = ErrorResponse::read(&mut self.stack.as_slice())
+                    let err = self
+                        .buffer
+                        .parse::<ErrorResponse>(&msg)
                         .map_or_else(identity, Error::from);
-                    self.stack.truncate(start);
+                    self.buffer.clear();
                     return Err(err);
                 }
                 NegotiateProtocolVersion::PREFIX => {
-                    let err = NegotiateProtocolVersion::read(&mut self.stack.as_slice())
+                    let err = self
+                        .buffer
+                        .parse::<NegotiateProtocolVersion>(&msg)
                         .map_or_else(identity, Error::from);
-                    self.stack.truncate(start);
+                    self.buffer.clear();
                     return Err(err);
                 }
-                NoticeResponse::PREFIX | ParameterStatus::PREFIX => self.stack.truncate(start),
-                prefix => {
-                    return Ok(AnyMessage {
-                        prefix,
-                        body: (start + 5)..self.stack.len(),
-                    });
-                }
+                NoticeResponse::PREFIX | ParameterStatus::PREFIX => self.buffer.clear(),
+                _ => return Ok(msg),
             }
         }
     }
 
-    fn read_message<'a, M: BackendMessage<'a>>(&'a self, msg: &AnyMessage) -> Result<M> {
-        M::read(&self.stack[msg.body.clone()])
-    }
-}
-
-pub struct Connection<T> {
-    transport: BufferedTransport<T>,
-    ready: bool,
-}
-
-impl<T: Transport> Connection<T> {
     pub async fn connect(config: &Config) -> Result<Self> {
-        let mut transport = BufferedTransport {
-            transport: T::connect(config).await?,
-            stack: Vec::new(),
-            checkpoint: 0,
+        let mut this = Self {
+            buffer: Buffer::new(T::connect(config).await?),
+            ready_for_query: true,
         };
 
         // Send StartupMessage
-        transport
-            .send(|writer| {
+        this.buffer
+            .send_all(|mut writer| {
                 writer.add(StartupMessage {
                     user: &config.user,
                     database: &config.database,
-                })?;
-                Ok(())
+                })
             })
             .await?;
 
         // Wait for Authenticate
-        let msg = transport.receive_any().await?;
+        let msg = this.receive_unhandled().await?;
         match msg.prefix {
-            Authentication::PREFIX => match transport.read_message::<Authentication>(&msg)? {
+            Authentication::PREFIX => match this.buffer.parse(&msg)? {
                 Authentication::Ok => (),
             },
             n => return Err(unexpected_message_prefix(n)),
         }
 
         // Wait for BackendKeyData
-        let msg = transport.receive_any().await?;
+        let msg = this.receive_unhandled().await?;
         match msg.prefix {
             BackendKeyData::PREFIX => (),
             n => return Err(unexpected_message_prefix(n)),
         };
 
-        Ok(Self {
-            transport,
-            ready: false,
-        })
+        // Wait for ReadyForQuery
+        let msg = this.receive_unhandled().await?;
+        match msg.prefix {
+            ReadyForQuery::PREFIX => (),
+            n => return Err(unexpected_message_prefix(n)),
+        };
+
+        Ok(this)
     }
 
     pub async fn query<'a, R, U>(
@@ -189,29 +131,27 @@ impl<T: Transport> Connection<T> {
     {
         self.recycle().await?;
 
-        // Send Parse, Bind, Execute and Sync to start the query
-        self.transport
-            .send(|writer| {
-                writer
-                    .add(Parse { query: statement })?
-                    .add(Bind { params })?
-                    .add(Execute)?
-                    .add(Sync)?;
+        // Send Parse, Bind, Execute and Sync
+        self.buffer
+            .send_all(|mut writer| {
+                writer.add(Parse { query: statement })?;
+                writer.add(Bind { params })?;
+                writer.add(Execute)?;
+                writer.add(Sync)?;
+                self.ready_for_query = false;
                 Ok(())
             })
             .await?;
 
-        self.ready = false;
-
         // Waits for ParseComplete
-        let msg = self.transport.receive_any().await?;
+        let msg = self.receive_unhandled().await?;
         match msg.prefix {
             ParseComplete::PREFIX => (),
             n => return Err(unexpected_message_prefix(n)),
         }
 
         // Waits for BindComplete
-        let msg = self.transport.receive_any().await?;
+        let msg = self.receive_unhandled().await?;
         match msg.prefix {
             BindComplete::PREFIX => (),
             n => return Err(unexpected_message_prefix(n)),
@@ -221,15 +161,15 @@ impl<T: Transport> Connection<T> {
     }
 
     pub async fn recycle(&mut self) -> Result<()> {
-        if self.ready {
+        if !self.ready_for_query {
             return Ok(());
         }
 
         loop {
-            let msg = self.transport.receive_any().await?;
+            let msg = self.receive_unhandled().await?;
             match msg.prefix {
                 ReadyForQuery::PREFIX => {
-                    self.ready = true;
+                    self.ready_for_query = true;
                     return Ok(());
                 }
                 CommandComplete::PREFIX | EmptyQueryResponse::PREFIX | DataRow::PREFIX => (),
@@ -292,12 +232,12 @@ impl<'a, R, U: FromRow<'a, R>, T: Transport> QueryStream<R, U, T> {
     }
 
     pub async fn next(&'a mut self) -> Result<Option<U>> {
-        let msg = self.0.transport.receive_any().await?;
+        let msg = self.0.receive_unhandled().await?;
         match msg.prefix {
             CommandComplete::PREFIX | EmptyQueryResponse::PREFIX => Ok(None),
             DataRow::PREFIX => {
                 let row = Row {
-                    inner: self.0.transport.read_message(&msg)?,
+                    inner: self.0.buffer.parse(&msg)?,
                 };
                 U::from_row(row).map(Some)
             }

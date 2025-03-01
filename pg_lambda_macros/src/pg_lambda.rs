@@ -6,7 +6,8 @@ use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::token::Paren;
 use syn::{
-    braced, parenthesized, Attribute, Expr, ExprPath, Ident, LitStr, Path, Result, Token, Type, TypePath, Visibility
+    Attribute, Expr, ExprPath, Ident, LitStr, Path, Result, Token, Type, TypePath, Visibility,
+    braced, parenthesized,
 };
 
 use crate::{query_params, util};
@@ -191,21 +192,23 @@ pub fn main(input: TokenStream) -> Result<TokenStream2> {
             }
         };
 
-        let output = quote!(-> #macro_util::PgLambda<impl #macro_util::QueryParams + #lifetime, #ret>);
-
-        let argcount = inputs.len() as i32;
+        let output =
+            quote!(-> #macro_util::PgLambda<impl #macro_util::QueryParams + #lifetime, #ret>);
 
         let params = query_params::from_expr_type_pairs(
-            &macro_util, 
-            inputs.iter().map(|LambdaArg { ident, ty, .. }| {
-                let ty = ty.clone();
-                let expr = Expr::Path(ExprPath {
-                    attrs: Vec::new(),
-                    qself: None,
-                    path: Path::from(ident.clone()),
-                });
-                (ty, expr)
-            }).collect()
+            &macro_util,
+            inputs
+                .iter()
+                .map(|LambdaArg { ident, ty, .. }| {
+                    let ty = ty.clone();
+                    let expr = Expr::Path(ExprPath {
+                        attrs: Vec::new(),
+                        qself: None,
+                        path: Path::from(ident.clone()),
+                    });
+                    (ty, expr)
+                })
+                .collect(),
         );
 
         let inputs = inputs.iter().map(

@@ -8,12 +8,12 @@ impl TransportSend for TcpStream {
         Self::connect(&config.host)
     }
 
-    async fn read_exact(&mut self, limit: i32, dst: &mut Vec<u8>) -> Result<()> {
-        Read::take(self, limit as u64).read_to_end(dst).map(drop)
+    async fn read(&mut self, dst: &mut [u8]) -> Result<i32> {
+        Read::read(self, dst).map(|count| count as i32)
     }
 
-    async fn write_all(&mut self, src: &[u8]) -> Result<()> {
-        Write::write_all(self, src)
+    async fn write(&mut self, src: &[u8]) -> Result<i32> {
+        Write::write(self, src).map(|count| count as i32)
     }
 }
 
@@ -25,17 +25,16 @@ impl TransportSend for tokio::net::TcpStream {
         Self::connect(&config.host).await
     }
 
-    async fn read_exact(&mut self, limit: i32, dst: &mut Vec<u8>) -> Result<()> {
-        use tokio::io::AsyncReadExt;
-        tokio::io::AsyncReadExt::take(self, limit as u64)
-            .read_to_end(dst)
+    async fn read(&mut self, dst: &mut [u8]) -> Result<i32> {
+        tokio::io::AsyncReadExt::read(self, dst)
             .await
-            .map(drop)
+            .map(|count| count as i32)
     }
 
-    async fn write_all(&mut self, src: &[u8]) -> Result<()> {
-        use tokio::io::AsyncWriteExt;
-        AsyncWriteExt::write_all(self, src).await
+    async fn write(&mut self, src: &[u8]) -> Result<i32> {
+        tokio::io::AsyncWriteExt::write(self, src)
+            .await
+            .map(|count| count as i32)
     }
 }
 
@@ -50,7 +49,7 @@ impl<T: TransportSend + 'static> bb8::ManageConnection for super::ConnectionMana
     }
 
     async fn is_valid(&self, _: &mut Self::Connection) -> Result<()> {
-        // conn.query::<Void, ()>("", NoParams)
+        // conn.query::<Void, ()>("", NoParams).await
         Ok(())
     }
 
@@ -93,8 +92,8 @@ impl<T: TransportSend + SyncTransport + 'static> r2d2::ManageConnection
             .expect("transport marked as sync should not use awaits")
     }
 
-    fn is_valid(&self, _: &mut Self::Connection) -> Result<()> {
-        Ok(())
+    fn is_valid(&self, conn: &mut Self::Connection) -> Result<()> {
+        conn.query_sync::<super::result::Void, ()>("", super::params::NoParams)
     }
 
     fn has_broken(&self, _: &mut Self::Connection) -> bool {

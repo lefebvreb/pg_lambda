@@ -44,7 +44,10 @@ pub fn write_i32(count: i32, dst: &mut Vec<u8>) {
     dst.extend(&count.to_be_bytes());
 }
 
-pub fn write_value<T: PgType, U: ToPgValue<T>>(value: &U, dst: &mut Vec<u8>) -> std::io::Result<()> {
+pub fn write_value<T: PgType, U: ToPgValue<T>>(
+    value: &U,
+    dst: &mut Vec<u8>,
+) -> std::io::Result<()> {
     if value.is_null() {
         write_i32(-1, dst);
     } else {

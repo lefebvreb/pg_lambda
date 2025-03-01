@@ -1,0 +1,161 @@
+use std::io::Result;
+use std::ops::Range;
+
+use super::Transport;
+use super::messages::{BackendMessage, FrontendMessage};
+
+pub struct MessageWriter<'a> {
+    stack: &'a mut Vec<u8>,
+}
+
+impl MessageWriter<'_> {
+    pub fn add<M: FrontendMessage>(&mut self, msg: M) -> Result<()> {
+        if let Some(byte) = M::PREFIX {
+            self.stack.push(byte);
+        }
+
+        let start = self.stack.len();
+        self.stack.extend([0; 4]);
+        msg.write(self.stack)?;
+        let size = (self.stack.len() - start) as i32;
+        self.stack[start..start + 4].copy_from_slice(&size.to_be_bytes());
+
+        Ok(())
+    }
+}
+
+pub struct AnyMessage {
+    pub prefix: u8,
+    body: Range<usize>,
+}
+
+enum State {
+    Idle,
+    Sending { total: i32, remaining: i32 },
+    ReceivingHead { remaining: i32 },
+    ReceivingBody { size: i32, remaining: i32 },
+}
+
+pub struct Buffer<T> {
+    transport: T,
+    stack: Vec<u8>,
+    state: State,
+}
+
+impl<T: Transport> Buffer<T> {
+    pub fn new(transport: T) -> Self {
+        Self {
+            transport,
+            stack: Vec::new(),
+            state: State::Idle,
+        }
+    }
+
+    pub fn clear(&mut self) {
+        match self.state {
+            State::Idle => self.stack.clear(),
+            _ => panic!(),
+        }
+    }
+
+    async fn send_bytes(&mut self, total: i32, mut remaining: i32) -> Result<()> {
+        loop {
+            let range = (self.stack.len() - remaining as usize)..;
+            remaining -= self.transport.write(&self.stack[range]).await?;
+            if remaining == 0 {
+                break;
+            }
+            self.state = State::Sending { total, remaining };
+        }
+
+        self.stack.truncate(self.stack.len() - total as usize);
+        self.state = State::Idle;
+        Ok(())
+    }
+
+    pub async fn send_all(
+        &mut self,
+        write: impl FnOnce(MessageWriter) -> Result<()>,
+    ) -> Result<()> {
+        match self.state {
+            State::Idle => (),
+            State::Sending { total, remaining } => self.send_bytes(total, remaining).await?,
+            _ => panic!(),
+        }
+
+        let start = self.stack.len();
+        let writer = MessageWriter {
+            stack: &mut self.stack,
+        };
+        write(writer).inspect_err(|_| self.stack.truncate(start))?;
+
+        let total = (self.stack.len() - start) as i32;
+        self.state = State::Sending {
+            total,
+            remaining: total,
+        };
+        self.send_bytes(total, total).await
+    }
+
+    fn extend_buffer(&mut self, additional: i32) {
+        self.stack.reserve(additional as usize);
+        unsafe {
+            self.stack.set_len(self.stack.len() + additional as usize);
+        }
+    }
+
+    async fn receive_head(&mut self, mut remaining: i32) -> Result<AnyMessage> {
+        loop {
+            let range = (self.stack.len() - remaining as usize)..;
+            remaining -= self.transport.read(&mut self.stack[range]).await?;
+            if remaining == 0 {
+                break;
+            }
+            self.state = State::ReceivingHead { remaining };
+        }
+
+        let size = i32::from_be_bytes(self.stack[(self.stack.len() - 4)..].try_into().unwrap());
+        self.state = State::ReceivingBody {
+            size,
+            remaining: size,
+        };
+        self.extend_buffer(size);
+        self.receive_body(size, size).await
+    }
+
+    async fn receive_body(&mut self, size: i32, mut remaining: i32) -> Result<AnyMessage> {
+        loop {
+            let range = (self.stack.len() - remaining as usize)..;
+            remaining -= self.transport.read(&mut self.stack[range]).await?;
+            if remaining == 0 {
+                break;
+            }
+            self.state = State::ReceivingBody { size, remaining };
+        }
+
+        self.state = State::Idle;
+        Ok(AnyMessage {
+            prefix: self.stack[self.stack.len() - size as usize - 5],
+            body: (self.stack.len() - size as usize)..self.stack.len(),
+        })
+    }
+
+    pub async fn receive_any(&mut self) -> Result<AnyMessage> {
+        match self.state {
+            State::Idle => (),
+            State::Sending { total, remaining } => self.send_bytes(total, remaining).await?,
+            State::ReceivingHead { remaining } => return self.receive_head(remaining).await,
+            State::ReceivingBody { size, remaining } => {
+                return self.receive_body(size, remaining).await;
+            }
+        }
+
+        self.state = State::ReceivingHead { remaining: 5 };
+        self.extend_buffer(5);
+        self.receive_head(5).await
+    }
+
+    pub fn parse<'a, M: BackendMessage<'a>>(&'a self, msg: &AnyMessage) -> Result<M> {
+        M::read(&self.stack[msg.body.clone()])
+    }
+}
