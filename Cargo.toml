@@ -37,4 +37,3 @@ path = "pg_lambda_macros"
 [dev-dependencies]
 fastrand = { version = "2.3.0", default-features = false, features = ["std"] }
 futures = { version = "*", default-features = false, features = ["executor"] }
-

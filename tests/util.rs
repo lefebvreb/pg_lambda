@@ -6,7 +6,7 @@ use std::panic::{UnwindSafe, catch_unwind, resume_unwind};
 use futures::executor::block_on;
 use pg_lambda::connection::params::NoParams;
 use pg_lambda::connection::result::Void;
-use pg_lambda::connection::{Config, Connection};
+use pg_lambda::connection::{Config, SyncConnection};
 
 pub fn test_database(f: impl AsyncFnOnce(&Config) -> Result<()> + UnwindSafe) {
     // Retrieve config.
@@ -22,7 +22,7 @@ pub fn test_database(f: impl AsyncFnOnce(&Config) -> Result<()> + UnwindSafe) {
     };
 
     // Open connection to master db.
-    let res = Connection::<TcpStream>::connect_sync(&config);
+    let res = SyncConnection::<TcpStream>::connect(&config);
     assert!(
         res.is_ok(),
         "failed to open connection to master database: {}",
@@ -32,7 +32,7 @@ pub fn test_database(f: impl AsyncFnOnce(&Config) -> Result<()> + UnwindSafe) {
 
     // Create test database.
     let test_database = format!("testdb_{}", fastrand::u128(..));
-    let res = conn.query_sync::<Void, ()>(
+    let res = conn.query::<Void, ()>(
         &format!("CREATE DATABASE \"{test_database}\" TEMPLATE template0"),
         NoParams,
     );
@@ -53,7 +53,7 @@ pub fn test_database(f: impl AsyncFnOnce(&Config) -> Result<()> + UnwindSafe) {
     let test_res = catch_unwind(|| block_on(f(&test_config)));
 
     // Open connection to master db.
-    let res = Connection::<TcpStream>::connect_sync(&config);
+    let res = SyncConnection::<TcpStream>::connect(&config);
     assert!(
         res.is_ok(),
         "failed to open connection to master database: {}",
@@ -62,7 +62,7 @@ pub fn test_database(f: impl AsyncFnOnce(&Config) -> Result<()> + UnwindSafe) {
     let mut conn = res.unwrap();
 
     // Drop test database.
-    let res = conn.query_sync::<Void, ()>(
+    let res = conn.query::<Void, ()>(
         &format!("DROP DATABASE \"{test_database}\" WITH (FORCE)"),
         NoParams,
     );

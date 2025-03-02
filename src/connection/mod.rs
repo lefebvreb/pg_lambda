@@ -2,6 +2,7 @@ use std::convert::identity;
 use std::io::{Error, ErrorKind, Result};
 use std::marker::PhantomData;
 use std::mem::transmute;
+use std::ops::{Deref, DerefMut};
 
 use buffer::{AnyMessage, Buffer};
 use futures::FutureExt;
@@ -24,7 +25,7 @@ pub mod params;
 pub mod result;
 mod util;
 
-// todo: add a config for max connection buffer size, and implement a mechanism to shrink buffers than get too large.
+// todo: add a config for max connection buffer size, and implement a mechanism to shrink buffers when it gets too large.
 #[derive(Clone, Debug)]
 pub struct Config {
     pub user: String,
@@ -58,6 +59,7 @@ pub struct Connection<T> {
 }
 
 impl<T: Transport> Connection<T> {
+    /// Receives a single message that is not an error or warning and cannot be automatically handled.
     async fn receive_unhandled(&mut self) -> Result<AnyMessage> {
         loop {
             let msg = self.buffer.receive_any().await?;
@@ -78,12 +80,14 @@ impl<T: Transport> Connection<T> {
                     self.buffer.clear();
                     return Err(err);
                 }
+                // todo: handle these better.
                 NoticeResponse::PREFIX | ParameterStatus::PREFIX => self.buffer.clear(),
                 _ => return Ok(msg),
             }
         }
     }
 
+    /// Performs SASL authentication. Only supports `SCRAM-SHA-256` for now.
     async fn sasl(&mut self, config: &Config, mechanisms: Vec<Box<[u8]>>) -> Result<()> {
         let mut session =
             SASLConfig::with_credentials(None, config.user.clone(), config.password.clone())
@@ -259,50 +263,65 @@ impl<T: Transport> Connection<T> {
         Ok(())
     }
 
-    pub fn connect_sync(config: &Config) -> Result<Self>
-    where
-        T: SyncTransport,
-    {
-        Self::connect(config)
-            .now_or_never()
-            .expect("transport should be sync")
+    pub fn is_closed(&self) -> bool {
+        self.buffer.is_closed()
+    }
+}
+
+#[derive(Debug)]
+pub struct SyncConnection<T> {
+    inner: Connection<T>,
+}
+
+impl<T: SyncTransport> SyncConnection<T> {
+    pub fn connect(config: &Config) -> Result<Self> {
+        Ok(Self {
+            inner: Connection::connect(config)
+                .now_or_never()
+                .expect("transport should be sync")?,
+        })
     }
 
-    pub fn query_sync<'a, R, U>(
-        &'a mut self,
-        statement: &str,
-        params: impl QueryParams,
-    ) -> Result<U>
+    pub fn query<'a, R, U>(&'a mut self, statement: &str, params: impl QueryParams) -> Result<U>
     where
         R: QueryResult,
         U: FromQueryResult<'a, R, T>,
-        T: SyncTransport,
     {
-        self.query(statement, params)
+        self.inner
+            .query(statement, params)
             .now_or_never()
             .expect("transport should be sync")
     }
 
-    pub fn recycle_sync(&mut self) -> Result<()>
+    pub fn recycle(&mut self) -> Result<()> {
+        self.inner
+            .recycle()
+            .now_or_never()
+            .expect("transport should be sync")
+    }
+
+    pub fn terminate(self) -> Result<()>
     where
         T: SyncTransport,
     {
-        self.recycle()
+        self.inner
+            .terminate()
             .now_or_never()
             .expect("transport should be sync")
     }
+}
 
-    pub fn terminate_sync(self) -> Result<()>
-    where
-        T: SyncTransport,
-    {
-        self.terminate()
-            .now_or_never()
-            .expect("transport should be sync")
+impl<T> Deref for SyncConnection<T> {
+    type Target = Connection<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
     }
+}
 
-    pub fn is_closed(&self) -> bool {
-        self.buffer.is_closed()
+impl<T> DerefMut for SyncConnection<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
     }
 }
 
@@ -315,7 +334,10 @@ impl<T: Transport> Connection<T> {
 /// called a "lending iterator", or "streaming interator" and is not
 /// well supported by the Rust ecosystem.
 #[repr(transparent)]
-pub struct QueryStream<R, U, T>(Connection<T>, PhantomData<(R, U)>);
+pub struct QueryStream<R, U, T> {
+    inner: Connection<T>,
+    _marker: PhantomData<(R, U)>,
+}
 
 impl<'a, R, U: FromRow<'a, R>, T: Transport> QueryStream<R, U, T> {
     fn new(stream: &mut Connection<T>) -> &mut Self {
@@ -326,12 +348,12 @@ impl<'a, R, U: FromRow<'a, R>, T: Transport> QueryStream<R, U, T> {
     }
 
     pub async fn next(&'a mut self) -> Result<Option<U>> {
-        self.0.buffer.clear();
-        let msg = self.0.receive_unhandled().await?;
+        self.inner.buffer.clear();
+        let msg = self.inner.receive_unhandled().await?;
         match msg.prefix() {
             CommandComplete::PREFIX | EmptyQueryResponse::PREFIX => Ok(None),
             DataRow::PREFIX => {
-                let row = Row::new(self.0.buffer.parse(&msg)?);
+                let row = Row::new(self.inner.buffer.parse(&msg)?);
                 U::from_row(row).map(Some)
             }
             n => Err(unexpected_message_prefix(n)),

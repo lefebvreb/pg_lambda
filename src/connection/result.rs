@@ -48,7 +48,7 @@ impl FromRow<'_, ()> for () {
 
 fn next_column<'a, T: PgType, U: FromPgValue<'a, T>>(row: &mut Row<'a>) -> Result<U> {
     match row.next() {
-        Some(Ok(Some(mut src))) => U::read(&mut src),
+        Some(Ok(Some(src))) => U::read(src),
         Some(Ok(None)) => U::null(),
         Some(Err(err)) => Err(err),
         None => Err(Error::new(ErrorKind::InvalidData, "unexpected end of row")),

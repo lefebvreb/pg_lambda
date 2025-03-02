@@ -18,7 +18,7 @@ pub trait FromPgValue<'a, T: PgType>: Sized + 'a {
         Err(Error::new(ErrorKind::InvalidData, "unexpected null value"))
     }
 
-    fn read(src: &mut &'a [u8]) -> Result<Self>;
+    fn read(src: &'a [u8]) -> Result<Self>;
 }
 
 pub struct Int4;
@@ -38,7 +38,7 @@ impl ToPgValue<Int4> for i32 {
 }
 
 impl FromPgValue<'_, Int4> for i32 {
-    fn read(src: &mut &'_ [u8]) -> Result<Self> {
+    fn read(mut src: &'_ [u8]) -> Result<Self> {
         let mut buf = [0; 4];
         src.read_exact(&mut buf)?;
         Ok(i32::from_be_bytes(buf))
@@ -58,7 +58,7 @@ impl ToPgValue<Text> for &str {
 }
 
 impl<'a> FromPgValue<'a, Text> for &'a str {
-    fn read(src: &mut &'a [u8]) -> Result<Self> {
+    fn read(src: &'a [u8]) -> Result<Self> {
         str::from_utf8(src).map_err(|e| {
             Error::new(
                 ErrorKind::InvalidData,
@@ -69,7 +69,7 @@ impl<'a> FromPgValue<'a, Text> for &'a str {
 }
 
 impl<'a> FromPgValue<'a, Text> for String {
-    fn read(src: &mut &'a [u8]) -> Result<Self> {
+    fn read(src: &'a [u8]) -> Result<Self> {
         <&str as FromPgValue<Text>>::read(src).map(ToOwned::to_owned)
     }
 }

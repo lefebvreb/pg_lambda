@@ -5,6 +5,7 @@ pub mod types;
 
 pub mod prelude {
     pub use crate::lambda::pg_lambda;
+    #[doc(inline)]
     pub use crate::schema::Table;
 }
 

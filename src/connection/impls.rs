@@ -87,19 +87,16 @@ impl<T: TransportSend> deadpool::managed::Manager for super::ConnectionManager<T
 impl<T: TransportSend + SyncTransport + 'static> r2d2::ManageConnection
     for super::ConnectionManager<T>
 {
-    type Connection = super::Connection<T>;
+    type Connection = super::SyncConnection<T>;
 
     type Error = std::io::Error;
 
     fn connect(&self) -> Result<Self::Connection> {
-        use futures::FutureExt;
-        super::Connection::connect(&self.config)
-            .now_or_never()
-            .expect("transport marked as sync should not use awaits")
+        super::SyncConnection::connect(&self.config)
     }
 
     fn is_valid(&self, conn: &mut Self::Connection) -> Result<()> {
-        conn.query_sync::<super::result::Void, ()>("", super::params::NoParams)
+        conn.query::<super::result::Void, ()>("", super::params::NoParams)
     }
 
     fn has_broken(&self, conn: &mut Self::Connection) -> bool {
