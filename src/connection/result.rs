@@ -9,7 +9,13 @@ use super::util::{read_i32, read_slice};
 use super::{QueryStream, Transport};
 
 pub struct Row<'a> {
-    pub(crate) inner: DataRow<'a>,
+    inner: DataRow<'a>,
+}
+
+impl<'a> Row<'a> {
+    pub(crate) fn new(data: DataRow<'a>) -> Self {
+        Self { inner: data }
+    }
 }
 
 impl<'a> Iterator for Row<'a> {
@@ -35,30 +41,55 @@ pub trait FromRow<'a, R>: Sized + 'a {
 }
 
 impl FromRow<'_, ()> for () {
-    fn from_row(mut row: Row) -> Result<Self> {
-        match row.next() {
-            Some(_) => Err(Error::new(
-                ErrorKind::InvalidData,
-                "unexpected an empty row",
-            )),
-            None => Ok(()),
+    fn from_row(_: Row) -> Result<Self> {
+        Ok(())
+    }
+}
+
+fn next_column<'a, T: PgType, U: FromPgValue<'a, T>>(row: &mut Row<'a>) -> Result<U> {
+    match row.next() {
+        Some(Ok(Some(mut src))) => U::read(&mut src),
+        Some(Ok(None)) => U::null(),
+        Some(Err(err)) => Err(err),
+        None => Err(Error::new(ErrorKind::InvalidData, "unexpected end of row")),
+    }
+}
+
+macro_rules! impl_from_row {
+    {
+        $($t:ident $u:ident)*
+    } => {
+        impl<'a, $($t: PgType, $u: FromPgValue<'a, $t>,)*> FromRow<'a, ($($t,)*)> for ($($u,)*) {
+            fn from_row(mut row: Row<'a>) -> Result<Self> {
+                Ok((
+                    $(
+                        next_column::<$t, $u>(&mut row)?,
+                    )*
+                ))
+            }
         }
-    }
+    };
 }
 
-impl<'a, T0: PgType, U0: FromPgValue<'a, T0>> FromRow<'a, (T0,)> for (U0,) {
-    fn from_row(mut row: Row<'a>) -> Result<Self> {
-        let u0 = match row.next() {
-            Some(Ok(Some(mut src))) => U0::read(&mut src),
-            Some(Ok(None)) => U0::null(),
-            Some(Err(err)) => return Err(err),
-            None => panic!(),
-        }?;
-        Ok((u0,))
-    }
+macro_rules! for_all_tuples {
+    ($mac:ident) => {
+        $mac! { T0 U0 }
+        $mac! { T0 U0 T1 U1 }
+        $mac! { T0 U0 T1 U1 T2 U2 }
+        $mac! { T0 U0 T1 U1 T2 U2 T3 U3 }
+        $mac! { T0 U0 T1 U1 T2 U2 T3 U3 T4 U4 }
+        $mac! { T0 U0 T1 U1 T2 U2 T3 U3 T4 U4 T5 U5 }
+        $mac! { T0 U0 T1 U1 T2 U2 T3 U3 T4 U4 T5 U5 T6 U6 }
+        $mac! { T0 U0 T1 U1 T2 U2 T3 U3 T4 U4 T5 U5 T6 U6 T7 U7 }
+        $mac! { T0 U0 T1 U1 T2 U2 T3 U3 T4 U4 T5 U5 T6 U6 T7 U7 T8 U8 }
+        $mac! { T0 U0 T1 U1 T2 U2 T3 U3 T4 U4 T5 U5 T6 U6 T7 U7 T8 U8 T9 U9 }
+        $mac! { T0 U0 T1 U1 T2 U2 T3 U3 T4 U4 T5 U5 T6 U6 T7 U7 T8 U8 T9 U9 T10 U10 }
+        $mac! { T0 U0 T1 U1 T2 U2 T3 U3 T4 U4 T5 U5 T6 U6 T7 U7 T8 U8 T9 U9 T10 U10 T11 U11 }
+        $mac! { T0 U0 T1 U1 T2 U2 T3 U3 T4 U4 T5 U5 T6 U6 T7 U7 T8 U8 T9 U9 T10 U10 T11 U11 T12 U12 }
+    };
 }
 
-// more tuple impls...
+for_all_tuples!(impl_from_row);
 
 impl<'a, R> FromRow<'a, R> for Row<'a> {
     fn from_row(row: Row<'a>) -> Result<Self> {
@@ -67,8 +98,6 @@ impl<'a, R> FromRow<'a, R> for Row<'a> {
 }
 
 // Derive for custom types
-
-// ----------------- QueryResult
 
 pub trait QueryResult: 'static {
     type Row;
@@ -94,8 +123,6 @@ pub struct SetOf<R: 'static>(PhantomData<R>);
 impl<R> QueryResult for SetOf<R> {
     type Row = R;
 }
-
-// ----------------- FromQueryResult
 
 pub trait FromQueryResult<'a, R: QueryResult, T: Transport>: Sized + 'a {
     type Row: FromRow<'a, R::Row>;

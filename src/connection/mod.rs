@@ -59,7 +59,7 @@ impl<T: Transport> Connection<T> {
     async fn receive_unhandled(&mut self) -> Result<AnyMessage> {
         loop {
             let msg = self.buffer.receive_any().await?;
-            match msg.prefix {
+            match msg.prefix() {
                 ErrorResponse::PREFIX => {
                     let err = self
                         .buffer
@@ -109,7 +109,7 @@ impl<T: Transport> Connection<T> {
 
         loop {
             let msg = self.receive_unhandled().await?;
-            match msg.prefix {
+            match msg.prefix() {
                 Authentication::PREFIX => match self.buffer.parse(&msg)? {
                     Authentication::Ok => return Ok(()),
                     Authentication::SaslContinue { data } => {
@@ -153,7 +153,7 @@ impl<T: Transport> Connection<T> {
 
         // Wait for Authenticate
         let msg = this.receive_unhandled().await?;
-        match msg.prefix {
+        match msg.prefix() {
             Authentication::PREFIX => match this.buffer.parse(&msg)? {
                 Authentication::Ok => (),
                 Authentication::Sasl { mechanisms } => {
@@ -171,7 +171,7 @@ impl<T: Transport> Connection<T> {
 
         // Wait for BackendKeyData
         let msg = this.receive_unhandled().await?;
-        match msg.prefix {
+        match msg.prefix() {
             BackendKeyData::PREFIX => (),
             n => return Err(unexpected_message_prefix(n)),
         };
@@ -179,7 +179,7 @@ impl<T: Transport> Connection<T> {
 
         // Wait for ReadyForQuery
         let msg = this.receive_unhandled().await?;
-        match msg.prefix {
+        match msg.prefix() {
             ReadyForQuery::PREFIX => (),
             n => return Err(unexpected_message_prefix(n)),
         };
@@ -213,7 +213,7 @@ impl<T: Transport> Connection<T> {
 
         // Waits for ParseComplete
         let msg = self.receive_unhandled().await?;
-        match msg.prefix {
+        match msg.prefix() {
             ParseComplete::PREFIX => (),
             n => return Err(unexpected_message_prefix(n)),
         }
@@ -221,7 +221,7 @@ impl<T: Transport> Connection<T> {
 
         // Waits for BindComplete
         let msg = self.receive_unhandled().await?;
-        match msg.prefix {
+        match msg.prefix() {
             BindComplete::PREFIX => (),
             n => return Err(unexpected_message_prefix(n)),
         }
@@ -237,7 +237,7 @@ impl<T: Transport> Connection<T> {
 
         loop {
             let msg = self.receive_unhandled().await?;
-            match msg.prefix {
+            match msg.prefix() {
                 ReadyForQuery::PREFIX => {
                     self.ready_for_query = true;
                     return Ok(());
@@ -325,12 +325,10 @@ impl<'a, R, U: FromRow<'a, R>, T: Transport> QueryStream<R, U, T> {
     pub async fn next(&'a mut self) -> Result<Option<U>> {
         self.0.buffer.clear();
         let msg = self.0.receive_unhandled().await?;
-        match msg.prefix {
+        match msg.prefix() {
             CommandComplete::PREFIX | EmptyQueryResponse::PREFIX => Ok(None),
             DataRow::PREFIX => {
-                let row = Row {
-                    inner: self.0.buffer.parse(&msg)?,
-                };
+                let row = Row::new(self.0.buffer.parse(&msg)?);
                 U::from_row(row).map(Some)
             }
             n => Err(unexpected_message_prefix(n)),

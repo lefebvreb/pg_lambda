@@ -4,8 +4,8 @@ use std::io::{Error, ErrorKind, Result};
 
 use super::params::QueryParams;
 use super::util::{
-    read_cstr, read_i16, read_i32, read_slice, read_u8, write_cstr, write_i16, write_i32,
-    write_slice, write_str, write_u8,
+    read_cstr, read_i16, read_i32, read_u8, write_cstr, write_i16, write_i32, write_slice,
+    write_str, write_u8,
 };
 
 // https://www.postgresql.org/docs/current/protocol.html
@@ -378,8 +378,7 @@ impl<'a> BackendMessage<'a> for DataRow<'a> {
 
     fn read(mut src: &'a [u8]) -> Result<Self> {
         let len = read_i16(&mut src)?;
-        let columns = read_slice(len as i32, &mut src)?;
-        Ok(Self { len, columns })
+        Ok(Self { len, columns: src })
     }
 }
 

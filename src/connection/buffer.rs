@@ -29,8 +29,14 @@ impl MessageWriter<'_> {
 }
 
 pub struct AnyMessage {
-    pub prefix: u8,
+    prefix: u8,
     body: Range<usize>,
+}
+
+impl AnyMessage {
+    pub fn prefix(&self) -> u8 {
+        self.prefix
+    }
 }
 
 enum State {
