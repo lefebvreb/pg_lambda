@@ -1,12 +1,15 @@
 use std::io::{Error, ErrorKind, Result};
 use std::iter::FusedIterator;
 use std::marker::PhantomData;
+use std::mem::transmute;
+
+use futures::FutureExt;
 
 use crate::types::{FromPgValue, PgType};
 
 use super::messages::DataRow;
 use super::util::{read_i32, read_slice};
-use super::{QueryStream, Transport};
+use super::{Connection, SyncTransport, Transport};
 
 pub struct Row<'a> {
     inner: DataRow<'a>,
@@ -97,81 +100,121 @@ impl<'a, R> FromRow<'a, R> for Row<'a> {
     }
 }
 
-// Derive for custom types
-
-pub trait QueryResult: 'static {
-    type Row;
-}
+// todo: make a FromRow derive for struct types
 
 /// Marker for queries that are supposed to return nothing.
 pub struct Void;
 
-impl QueryResult for Void {
-    type Row = ();
+pub trait FromQueryResult<'a, R, T: Transport>: Sized + 'a {
+    #[allow(async_fn_in_trait)]
+    async fn from_conn(conn: &'a mut Connection<T>) -> Result<Self>;
+}
+
+impl<T: Transport> FromQueryResult<'_, Void, T> for () {
+    async fn from_conn(_: &mut Connection<T>) -> Result<Self> {
+        Ok(())
+    }
 }
 
 /// Marker for queries that are supposed to return a single row.
 pub struct Single<R: 'static>(PhantomData<R>);
 
-impl<R> QueryResult for Single<R> {
-    type Row = R;
+impl<'a, R, U: FromRow<'a, R>, T: Transport> FromQueryResult<'a, Single<R>, T> for U {
+    async fn from_conn(conn: &'a mut Connection<T>) -> Result<Self> {
+        // // todo: figure out a way to pull the first None that comes right after this
+        // match stream.next().await? {
+        //     Some(val) => Ok(val),
+        //     None => Err(Error::new(
+        //         ErrorKind::UnexpectedEof,
+        //         "unexpected empty query result",
+        //     )),
+        // }
+        todo!()
+    }
 }
 
 /// Marker for queries that are supposed to return a set of rows.
 pub struct SetOf<R: 'static>(PhantomData<R>);
 
-impl<R> QueryResult for SetOf<R> {
-    type Row = R;
-}
-
-pub trait FromQueryResult<'a, R: QueryResult, T: Transport>: Sized + 'a {
-    type Row: FromRow<'a, R::Row>;
-
-    #[allow(async_fn_in_trait)]
-    async fn from_stream(stream: &'a mut QueryStream<R::Row, Self::Row, T>) -> Result<Self>;
-}
-
-impl<T: Transport> FromQueryResult<'_, Void, T> for () {
-    type Row = ();
-
-    async fn from_stream(_: &mut QueryStream<(), (), T>) -> Result<Self> {
-        Ok(())
+impl<'a, R, U: FromRow<'a, R>, T: Transport> FromQueryResult<'a, SetOf<R>, T> for Vec<U> {
+    async fn from_conn(conn: &'a mut Connection<T>) -> Result<Self> {
+        // let mut res = Vec::new();
+        // while let Some(val) = stream.next().await? {
+        //     res.push(val);
+        // }
+        // Ok(res)
+        todo!()
     }
 }
 
-impl<'a, R, U: FromRow<'a, R>, T: Transport> FromQueryResult<'a, Single<R>, T> for U {
-    type Row = U;
-
-    async fn from_stream(stream: &'a mut QueryStream<R, U, T>) -> Result<Self> {
-        // todo: figure out a way to pull the first None that comes right after this
-        match stream.next().await? {
-            Some(val) => Ok(val),
-            None => Err(Error::new(
-                ErrorKind::UnexpectedEof,
-                "unexpected empty query result",
-            )),
-        }
-    }
+/// A stream of rows produced as a result of a query.
+///
+/// # Why is this not a regular [`Stream`](futures::stream::Stream)?
+///
+/// Values returned by [`QueryStream`] hold a reference to the buffer that
+/// is inside the underlying [`Connection`]. This pattern in rust is
+/// called a "lending iterator", and is not well supported by the Rust ecosystem.
+#[repr(transparent)]
+pub struct QueryStream<R, U, T> {
+    inner: Connection<T>,
+    _marker: PhantomData<(R, U)>,
 }
 
-impl<R, U: for<'x> FromRow<'x, R>, T: Transport> FromQueryResult<'_, SetOf<R>, T> for Vec<U> {
-    type Row = U;
-
-    async fn from_stream(stream: &mut QueryStream<R, U, T>) -> Result<Self> {
-        let mut res = Vec::new();
-        while let Some(val) = stream.next().await? {
-            res.push(val);
-        }
-        Ok(res)
+impl<'a, R, U: FromRow<'a, R>, T: Transport> QueryStream<R, U, T> {
+    fn new(conn: &mut Connection<T>) -> &mut Self {
+        // SAFETY: `QueryStream<R, U, T>` is a `#[repr(transparent)]` wrapper over
+        // a `Connection<T>`, it is therefore safe to transmute a mutable reference
+        // of one into a mutable reference of the other.
+        unsafe { transmute::<&mut Connection<T>, &mut QueryStream<R, U, T>>(conn) }
     }
+
+    pub async fn next(&'a mut self) -> Result<Option<U>> {
+        self.inner.buffer.clear();
+        self.inner.next_row().await
+    }
+
+    // pub async fn collect(&mut self) -> Result<Vec<U>>
+    // where
+    //     U: 'static,
+    // {
+    //     todo!()
+    // }
 }
 
 impl<'a, R, U: FromRow<'a, R>, T: Transport> FromQueryResult<'a, SetOf<R>, T>
     for &'a mut QueryStream<R, U, T>
 {
-    type Row = U;
+    async fn from_conn(conn: &'a mut Connection<T>) -> Result<Self> {
+        Ok(QueryStream::new(conn))
+    }
+}
 
-    async fn from_stream(stream: &'a mut QueryStream<R, U, T>) -> Result<Self> {
-        Ok(stream)
+#[repr(transparent)]
+pub struct QueryIter<R, U, T> {
+    inner: QueryStream<R, U, T>,
+}
+
+impl<'a, R, U: FromRow<'a, R>, T: Transport> QueryIter<R, U, T> {
+    fn new(conn: &mut Connection<T>) -> &mut Self {
+        // SAFETY: `QueryIter<R, U, T>` is a `#[repr(transparent)]` wrapper over
+        // a `Connection<T>`, it is therefore safe to transmute a mutable reference
+        // of one into a mutable reference of the other.
+        unsafe { transmute::<&mut Connection<T>, &mut QueryIter<R, U, T>>(conn) }
+    }
+
+    #[allow(clippy::should_implement_trait)]
+    pub fn next(&'a mut self) -> Result<Option<U>> {
+        self.inner
+            .next()
+            .now_or_never()
+            .expect("future should resolve immediately")
+    }
+}
+
+impl<'a, R, U: FromRow<'a, R>, T: SyncTransport> FromQueryResult<'a, SetOf<R>, T>
+    for &'a mut QueryIter<R, U, T>
+{
+    async fn from_conn(conn: &'a mut Connection<T>) -> Result<Self> {
+        Ok(QueryIter::new(conn))
     }
 }

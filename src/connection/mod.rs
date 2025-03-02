@@ -1,7 +1,5 @@
 use std::convert::identity;
 use std::io::{Error, ErrorKind, Result};
-use std::marker::PhantomData;
-use std::mem::transmute;
 use std::ops::{Deref, DerefMut};
 
 use buffer::{AnyMessage, Buffer};
@@ -13,7 +11,7 @@ use messages::{
     StartupMessage, Sync, Terminate,
 };
 use params::QueryParams;
-use result::{FromQueryResult, FromRow, QueryResult, Row};
+use result::{FromQueryResult, FromRow, Row};
 use rsasl::config::SASLConfig;
 use rsasl::prelude::{Mechname, SASLClient};
 use util::{from_session_error, unexpected_authentication_message, unexpected_message_prefix};
@@ -200,7 +198,6 @@ impl<T: Transport> Connection<T> {
         params: impl QueryParams,
     ) -> Result<U>
     where
-        R: QueryResult,
         U: FromQueryResult<'a, R, T>,
     {
         self.recycle().await?;
@@ -233,7 +230,7 @@ impl<T: Transport> Connection<T> {
         }
         self.buffer.clear();
 
-        U::from_stream(QueryStream::<R::Row, U::Row, T>::new(self)).await
+        U::from_conn(self).await
     }
 
     pub async fn recycle(&mut self) -> Result<()> {
@@ -266,6 +263,31 @@ impl<T: Transport> Connection<T> {
     pub fn is_closed(&self) -> bool {
         self.buffer.is_closed()
     }
+
+    pub(crate) async fn next_row<'a, R, U>(&'a mut self) -> Result<Option<U>>
+    where
+        U: FromRow<'a, R>,
+    {
+        let msg = self.receive_unhandled().await?;
+        match msg.prefix() {
+            CommandComplete::PREFIX | EmptyQueryResponse::PREFIX => (),
+            DataRow::PREFIX => {
+                let row = Row::new(self.buffer.parse(&msg)?);
+                return U::from_row(row).map(Some);
+            }
+            n => return Err(unexpected_message_prefix(n)),
+        }
+        self.buffer.clear();
+
+        let msg = self.receive_unhandled().await?;
+        match msg.prefix() {
+            ReadyForQuery::PREFIX => {
+                self.ready_for_query = true;
+                Ok(None)
+            },
+            n => Err(unexpected_message_prefix(n)),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -278,26 +300,25 @@ impl<T: SyncTransport> SyncConnection<T> {
         Ok(Self {
             inner: Connection::connect(config)
                 .now_or_never()
-                .expect("transport should be sync")?,
+                .expect("future should resolve immediately")?,
         })
     }
 
     pub fn query<'a, R, U>(&'a mut self, statement: &str, params: impl QueryParams) -> Result<U>
     where
-        R: QueryResult,
         U: FromQueryResult<'a, R, T>,
     {
         self.inner
             .query(statement, params)
             .now_or_never()
-            .expect("transport should be sync")
+            .expect("future should resolve immediately")
     }
 
     pub fn recycle(&mut self) -> Result<()> {
         self.inner
             .recycle()
             .now_or_never()
-            .expect("transport should be sync")
+            .expect("future should resolve immediately")
     }
 
     pub fn terminate(self) -> Result<()>
@@ -307,7 +328,7 @@ impl<T: SyncTransport> SyncConnection<T> {
         self.inner
             .terminate()
             .now_or_never()
-            .expect("transport should be sync")
+            .expect("future should resolve immediately")
     }
 }
 
@@ -322,51 +343,6 @@ impl<T> Deref for SyncConnection<T> {
 impl<T> DerefMut for SyncConnection<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
-    }
-}
-
-/// A stream of rows produced as a result of a query.
-///
-/// # Why is this not a regular [`Stream`](futures::stream::Stream)?
-///
-/// Values returned by [`QueryStream`] hold a reference to the buffer that
-/// is inside the underlying [`Connection`]. This pattern in rust is
-/// called a "lending iterator", or "streaming interator" and is not
-/// well supported by the Rust ecosystem.
-#[repr(transparent)]
-pub struct QueryStream<R, U, T> {
-    inner: Connection<T>,
-    _marker: PhantomData<(R, U)>,
-}
-
-impl<'a, R, U: FromRow<'a, R>, T: Transport> QueryStream<R, U, T> {
-    fn new(stream: &mut Connection<T>) -> &mut Self {
-        // SAFETY: `QueryStream<R, U, T>` is a `#[repr(transparent)]` wrapper over
-        // a `Connection<T>`, it is therefore safe to transmute a mutable reference
-        // of one into a mutable reference of the other.
-        unsafe { transmute::<&mut Connection<T>, &mut QueryStream<R, U, T>>(stream) }
-    }
-
-    pub async fn next(&'a mut self) -> Result<Option<U>> {
-        self.inner.buffer.clear();
-        let msg = self.inner.receive_unhandled().await?;
-        match msg.prefix() {
-            CommandComplete::PREFIX | EmptyQueryResponse::PREFIX => Ok(None),
-            DataRow::PREFIX => {
-                let row = Row::new(self.inner.buffer.parse(&msg)?);
-                U::from_row(row).map(Some)
-            }
-            n => Err(unexpected_message_prefix(n)),
-        }
-    }
-
-    pub fn next_sync(&'a mut self) -> Result<Option<U>>
-    where
-        T: SyncTransport,
-    {
-        self.next()
-            .now_or_never()
-            .expect("transport should be sync")
     }
 }
 

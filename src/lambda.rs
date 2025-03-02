@@ -4,7 +4,7 @@ use std::marker::PhantomData;
 pub use pg_lambda_macros::pg_lambda;
 
 use crate::connection::params::QueryParams;
-use crate::connection::result::{FromQueryResult, QueryResult};
+use crate::connection::result::FromQueryResult;
 use crate::connection::{Connection, SyncConnection, SyncTransport, Transport};
 
 pub struct PgLambda<P, R> {
@@ -26,7 +26,6 @@ impl<P, R> PgLambda<P, R> {
 impl<P, R> PgLambda<P, R>
 where
     P: QueryParams,
-    R: QueryResult,
 {
     pub async fn execute<'a, U, T>(self, conn: &'a mut Connection<T>) -> Result<U>
     where
