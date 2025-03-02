@@ -1,12 +1,9 @@
-use std::io::{Error, ErrorKind, Result};
+use std::io::{Error, Result};
 use std::ops::Range;
 
 use super::Transport;
 use super::messages::{BackendMessage, FrontendMessage};
-
-fn closed_error() -> Error {
-    Error::new(ErrorKind::UnexpectedEof, "transport was closed")
-}
+use super::util::closed_transport;
 
 pub struct MessageWriter<'a> {
     stack: &'a mut Vec<u8>,
@@ -39,6 +36,7 @@ impl AnyMessage {
     }
 }
 
+#[derive(Debug)]
 enum State {
     Idle,
     Closed,
@@ -47,6 +45,7 @@ enum State {
     ReceivingBody { size: i32, remaining: i32 },
 }
 
+#[derive(Debug)]
 pub struct Buffer<T> {
     transport: T,
     stack: Vec<u8>,
@@ -62,24 +61,32 @@ impl<T: Transport> Buffer<T> {
         }
     }
 
-    pub fn clear(&mut self) {
-        self.stack.clear();
+    fn extend_buffer(&mut self, additional: i32) {
+        self.stack.resize(self.stack.len() + additional as usize, 0);
     }
 
-    fn on_close(&mut self) -> Error {
+    fn set_closed(&mut self) -> Error {
         self.state = State::Closed;
-        closed_error()
+        closed_transport()
+    }
+
+    pub fn clear(&mut self) {
+        self.stack.clear();
     }
 
     pub fn is_closed(&self) -> bool {
         matches!(self.state, State::Closed)
     }
 
+    pub fn parse<'a, M: BackendMessage<'a>>(&'a self, msg: &AnyMessage) -> Result<M> {
+        M::read(&self.stack[msg.body.clone()])
+    }
+
     async fn send_bytes(&mut self, total: i32, mut remaining: i32) -> Result<()> {
         loop {
             let range = (self.stack.len() - remaining as usize)..;
             match self.transport.write(&self.stack[range]).await? {
-                0 => return Err(self.on_close()),
+                0 => return Err(self.set_closed()),
                 n if n == remaining => break,
                 n => remaining -= n,
             }
@@ -97,7 +104,7 @@ impl<T: Transport> Buffer<T> {
     ) -> Result<()> {
         match self.state {
             State::Idle => (),
-            State::Closed => return Err(closed_error()),
+            State::Closed => return Err(closed_transport()),
             State::Sending { total, remaining } => self.send_bytes(total, remaining).await?,
             _ => panic!(),
         }
@@ -116,15 +123,11 @@ impl<T: Transport> Buffer<T> {
         self.send_bytes(total, total).await
     }
 
-    fn extend_buffer(&mut self, additional: i32) {
-        self.stack.resize(self.stack.len() + additional as usize, 0);
-    }
-
     async fn receive_head(&mut self, mut remaining: i32) -> Result<AnyMessage> {
         loop {
             let range = (self.stack.len() - remaining as usize)..;
             match self.transport.read(&mut self.stack[range]).await? {
-                0 => return Err(self.on_close()),
+                0 => return Err(self.set_closed()),
                 n if n == remaining => break,
                 n => remaining -= n,
             }
@@ -153,7 +156,7 @@ impl<T: Transport> Buffer<T> {
         loop {
             let range = (self.stack.len() - remaining as usize)..;
             match self.transport.read(&mut self.stack[range]).await? {
-                0 => return Err(self.on_close()),
+                0 => return Err(self.set_closed()),
                 n if n == remaining => break,
                 n => remaining -= n,
             }
@@ -170,7 +173,7 @@ impl<T: Transport> Buffer<T> {
     pub async fn receive_any(&mut self) -> Result<AnyMessage> {
         match self.state {
             State::Idle => (),
-            State::Closed => return Err(closed_error()),
+            State::Closed => return Err(closed_transport()),
             State::Sending { total, remaining } => self.send_bytes(total, remaining).await?,
             State::ReceivingHead { remaining } => return self.receive_head(remaining).await,
             State::ReceivingBody { size, remaining } => {
@@ -181,9 +184,5 @@ impl<T: Transport> Buffer<T> {
         self.state = State::ReceivingHead { remaining: 5 };
         self.extend_buffer(5);
         self.receive_head(5).await
-    }
-
-    pub fn parse<'a, M: BackendMessage<'a>>(&'a self, msg: &AnyMessage) -> Result<M> {
-        M::read(&self.stack[msg.body.clone()])
     }
 }

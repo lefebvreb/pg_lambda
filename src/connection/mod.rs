@@ -25,16 +25,17 @@ pub mod result;
 mod util;
 
 // todo: add a config for max connection buffer size, and implement a mechanism to shrink buffers than get too large.
+#[derive(Clone, Debug)]
 pub struct Config {
     pub user: String,
     pub password: String,
     pub database: String,
     pub host: String,
+    pub port: u16,
 }
 
 #[trait_variant::make(TransportSend: Send)]
 pub trait Transport: Sized {
-    // todo: find a way to test multiple addresses
     async fn connect(config: &Config) -> Result<Self>;
 
     async fn read(&mut self, dst: &mut [u8]) -> Result<i32>;
@@ -50,6 +51,7 @@ pub trait Transport: Sized {
 /// synchronous context.
 pub trait SyncTransport: Transport {}
 
+#[derive(Debug)]
 pub struct Connection<T> {
     buffer: Buffer<T>,
     ready_for_query: bool,
@@ -250,6 +252,7 @@ impl<T: Transport> Connection<T> {
     }
 
     pub async fn terminate(mut self) -> Result<()> {
+        self.recycle().await?;
         self.buffer
             .send_all(|mut writer| writer.add(Terminate))
             .await?;

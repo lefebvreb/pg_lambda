@@ -28,7 +28,7 @@ where
     P: QueryParams,
     R: QueryResult,
 {
-    pub async fn call<'a, U, T>(self, conn: &'a mut Connection<T>) -> Result<U>
+    pub async fn execute<'a, U, T>(self, conn: &'a mut Connection<T>) -> Result<U>
     where
         U: FromQueryResult<'a, R, T>,
         T: Transport,
@@ -36,7 +36,7 @@ where
         conn.query(self.statement, self.params).await
     }
 
-    pub fn call_sync<'a, U, T>(self, conn: &'a mut Connection<T>) -> Result<U>
+    pub fn execute_sync<'a, U, T>(self, conn: &'a mut Connection<T>) -> Result<U>
     where
         U: FromQueryResult<'a, R, T>,
         T: SyncTransport,

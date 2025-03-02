@@ -99,6 +99,10 @@ impl From<NegotiateProtocolVersion<'_>> for Error {
     }
 }
 
+pub fn closed_transport() -> Error {
+    Error::new(ErrorKind::UnexpectedEof, "transport was closed")
+}
+
 pub fn from_session_error(e: SessionError) -> Error {
     Error::new(
         ErrorKind::InvalidData,

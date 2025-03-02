@@ -5,7 +5,7 @@ use super::{Config, SyncTransport, TransportSend};
 
 impl TransportSend for TcpStream {
     async fn connect(config: &Config) -> Result<Self> {
-        Self::connect(&config.host)
+        Self::connect(format!("{}:{}", config.host, config.port))
     }
 
     async fn read(&mut self, dst: &mut [u8]) -> Result<i32> {
@@ -22,7 +22,7 @@ impl SyncTransport for TcpStream {}
 #[cfg(feature = "tokio")]
 impl TransportSend for tokio::net::TcpStream {
     async fn connect(config: &Config) -> Result<Self> {
-        Self::connect(&config.host).await
+        Self::connect(format!("{}:{}", config.host, config.port)).await
     }
 
     async fn read(&mut self, dst: &mut [u8]) -> Result<i32> {
