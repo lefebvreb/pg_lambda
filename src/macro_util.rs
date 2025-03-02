@@ -40,7 +40,7 @@ where
     PgLambda::new(statement, params)
 }
 
-pub fn write_i32(count: i32, dst: &mut Vec<u8>) {
+pub fn write_i16(count: i16, dst: &mut Vec<u8>) {
     dst.extend(&count.to_be_bytes());
 }
 
@@ -49,13 +49,13 @@ pub fn write_value<T: PgType, U: ToPgValue<T>>(
     dst: &mut Vec<u8>,
 ) -> std::io::Result<()> {
     if value.is_null() {
-        write_i32(-1, dst);
+        dst.extend(&(-1i32).to_be_bytes());
     } else {
-        let len = dst.len();
+        let start = dst.len();
         dst.extend([0; 4]);
         U::write(value, dst)?;
-        let size = (dst.len() - len) as i32;
-        dst[len..len + 4].copy_from_slice(&size.to_be_bytes());
+        let size = ((dst.len() - start - 4) as i32).to_be_bytes();
+        dst[start..start + 4].copy_from_slice(&size);
     }
     Ok(())
 }

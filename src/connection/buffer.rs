@@ -111,10 +111,7 @@ impl<T: Transport> Buffer<T> {
     }
 
     fn extend_buffer(&mut self, additional: i32) {
-        self.stack.reserve(additional as usize);
-        unsafe {
-            self.stack.set_len(self.stack.len() + additional as usize);
-        }
+        self.stack.resize(self.stack.len() + additional as usize, 0);
     }
 
     async fn receive_head(&mut self, mut remaining: i32) -> Result<AnyMessage> {

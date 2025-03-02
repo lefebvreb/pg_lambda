@@ -3,7 +3,10 @@ use std::ffi::CStr;
 use std::io::{Error, ErrorKind, Result};
 
 use super::params::QueryParams;
-use super::util::*;
+use super::util::{
+    read_cstr, read_i16, read_i32, read_slice, read_u8, write_cstr, write_i16, write_i32,
+    write_slice, write_str, write_u8,
+};
 
 // https://www.postgresql.org/docs/current/protocol.html
 //
@@ -113,7 +116,7 @@ pub enum ReadyForQuery {
 }
 
 impl BackendMessage<'_> for ReadyForQuery {
-    const PREFIX: u8 = b'T';
+    const PREFIX: u8 = b'Z';
 
     fn read(mut src: &[u8]) -> Result<Self> {
         Ok(match read_u8(&mut src)? {
@@ -151,21 +154,73 @@ impl FrontendMessage for StartupMessage<'_> {
 }
 
 // https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-AUTHENTICATIONOK
-pub enum Authentication {
+pub enum Authentication<'a> {
     Ok,
+    Sasl { mechanisms: Vec<&'a CStr> },
+    SaslContinue { data: &'a [u8] },
+    SaslFinal,
 }
 
-impl<'a> BackendMessage<'a> for Authentication {
+impl<'a> BackendMessage<'a> for Authentication<'a> {
     const PREFIX: u8 = b'R';
 
     fn read(mut src: &'a [u8]) -> Result<Self> {
         match read_i32(&mut src)? {
             0 => Ok(Self::Ok),
+            10 => {
+                let mut mechanisms = Vec::new();
+                loop {
+                    let cstr = read_cstr(&mut src)?;
+                    if cstr == c"" {
+                        break;
+                    }
+                    mechanisms.push(cstr);
+                }
+                Ok(Self::Sasl { mechanisms })
+            }
+            11 => Ok(Self::SaslContinue { data: src }),
+            12 => Ok(Self::SaslFinal),
             n => Err(Error::new(
                 ErrorKind::Unsupported,
                 format!("unsupported authentication type, code: {n}"),
             )),
         }
+    }
+}
+
+// https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-SASLINITIALRESPONSE
+pub struct SaslInitialResponse<'a> {
+    pub mechanism: &'a str,
+    pub data: Option<&'a [u8]>,
+}
+
+impl FrontendMessage for SaslInitialResponse<'_> {
+    const PREFIX: Option<u8> = Some(b'p');
+
+    fn write(self, dst: &mut Vec<u8>) -> Result<()> {
+        write_str(self.mechanism, dst)?;
+        match self.data {
+            Some(data) => {
+                write_i32(data.len() as i32, dst);
+                write_slice(data, dst);
+            }
+            None => write_i32(-1, dst),
+        }
+        Ok(())
+    }
+}
+
+// https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-SASLRESPONSE
+pub struct SaslResponse<'a> {
+    pub data: &'a [u8],
+}
+
+impl FrontendMessage for SaslResponse<'_> {
+    const PREFIX: Option<u8> = Some(b'p');
+
+    fn write(self, dst: &mut Vec<u8>) -> Result<()> {
+        write_slice(self.data, dst);
+        Ok(())
     }
 }
 

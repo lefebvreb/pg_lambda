@@ -24,6 +24,7 @@ futures = { version = "0.3.31", default-features = false }
 inventory = { version = "0.3.19", default-features = false }
 lazy_static = { version = "1.5.0", default-features = false }
 r2d2 = { version = "0.8.10", default-features = false, optional = true }
+rsasl = { version = "2.2.0", default-features = false, features = ["config_builder", "provider", "scram-sha-2", "std"] }
 serde = { version = "1.0.217", default-features = false, features = ["derive", "std"] }
 serde_json = { version = "1.0.139", default-features = false, features = ["std"] }
 thiserror = { version = "2.0.11", default-features = false, features = ["std"] }

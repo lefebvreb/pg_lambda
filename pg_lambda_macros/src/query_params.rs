@@ -38,7 +38,7 @@ impl Parse for Input {
 }
 
 pub fn from_expr_type_pairs(macro_util: &TokenStream2, pairs: Vec<(Type, Expr)>) -> TokenStream2 {
-    let count = pairs.len() as i32;
+    let count = pairs.len() as i16;
     let tokens = pairs.iter().map(|(ty, expr)| {
         quote! {
             #macro_util::write_value::<#ty, _>(#expr, dst)?;
@@ -46,7 +46,7 @@ pub fn from_expr_type_pairs(macro_util: &TokenStream2, pairs: Vec<(Type, Expr)>)
     });
     quote! {
         #macro_util::new_params_fn(|dst| {
-            #macro_util::write_i32(#count, dst);
+            #macro_util::write_i16(#count, dst);
             #(#tokens)*
             Ok(())
         })

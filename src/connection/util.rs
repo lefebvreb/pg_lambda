@@ -2,6 +2,8 @@ use std::ffi::CStr;
 use std::io::{Error, ErrorKind, Read, Result};
 use std::slice;
 
+use rsasl::prelude::SessionError;
+
 use super::messages::{ErrorResponse, NegotiateProtocolVersion};
 
 pub fn read_u8(src: &mut &[u8]) -> Result<u8> {
@@ -67,6 +69,10 @@ pub fn write_str(val: &str, dst: &mut Vec<u8>) -> Result<()> {
     Ok(())
 }
 
+pub fn write_slice(val: &[u8], dst: &mut Vec<u8>) {
+    dst.extend(val);
+}
+
 impl From<ErrorResponse<'_>> for Error {
     fn from(msg: ErrorResponse) -> Self {
         Error::new(
@@ -93,9 +99,23 @@ impl From<NegotiateProtocolVersion<'_>> for Error {
     }
 }
 
+pub fn from_session_error(e: SessionError) -> Error {
+    Error::new(
+        ErrorKind::InvalidData,
+        format!("sasl authentication error: {e}"),
+    )
+}
+
 pub fn unexpected_message_prefix(n: u8) -> Error {
     Error::new(
         ErrorKind::InvalidData,
         format!("unknown backend message byte: 0x{n:x}"),
+    )
+}
+
+pub fn unexpected_authentication_message() -> Error {
+    Error::new(
+        ErrorKind::InvalidData,
+        "unexpected authentication message at this point",
     )
 }
