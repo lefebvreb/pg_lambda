@@ -1,3 +1,5 @@
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
 pub mod connection;
 pub mod lambda;
 pub mod schema;

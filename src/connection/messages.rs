@@ -273,7 +273,7 @@ impl BackendMessage<'_> for ParameterStatus {
 
 /// https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-PARSE
 pub struct Parse<'a> {
-    pub query: &'a str,
+    pub statement: &'a str,
 }
 
 impl FrontendMessage for Parse<'_> {
@@ -281,7 +281,7 @@ impl FrontendMessage for Parse<'_> {
 
     fn write(self, dst: &mut Vec<u8>) -> Result<()> {
         write_cstr(c"", dst);
-        write_str(self.query, dst)?;
+        write_str(self.statement, dst)?;
         write_i16(0, dst);
         Ok(())
     }

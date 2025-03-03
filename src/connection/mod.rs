@@ -11,7 +11,7 @@ use messages::{
     StartupMessage, Sync, Terminate,
 };
 use params::QueryParams;
-use result::{FromQueryResult, FromRow, Row};
+use result::{FromQueryResult, Row};
 use rsasl::config::SASLConfig;
 use rsasl::prelude::{Mechname, SASLClient};
 use util::{from_session_error, unexpected_authentication_message, unexpected_message_prefix};
@@ -44,10 +44,10 @@ pub trait Transport: Sized {
 
 /// Marker trait for [`Transport`] implementations that can be used in synchronous contexts.
 ///
-/// By implementing this trait on `T`, the implementer asserts that the implementation of
-/// [`Transport`] on `T` does not use any `await`s. Failure to uphold this assertion
-/// may result in [`panic`]s when using a [`Connection`] with this `T` in a
-/// synchronous context.
+/// By implementing this trait on `T`, the implementer asserts that futures returned by
+/// the implementation of [`Transport`] on `T` are immediately ready. Failure to uphold
+/// this assertion will result in [`panic`]s when using a [`Connection`] with this
+/// `T` in a synchronous context.
 pub trait SyncTransport: Transport {}
 
 #[derive(Debug)]
@@ -205,7 +205,7 @@ impl<T: Transport> Connection<T> {
         // Send Parse, Bind, Execute and Sync
         self.buffer
             .send_all(|mut writer| {
-                writer.add(Parse { query: statement })?;
+                writer.add(Parse { statement })?;
                 writer.add(Bind { params })?;
                 writer.add(Execute)?;
                 writer.add(Sync)?;
@@ -260,20 +260,15 @@ impl<T: Transport> Connection<T> {
         Ok(())
     }
 
-    pub(crate) async fn next_row<'a, R, U>(&'a mut self) -> Result<Option<U>>
-    where
-        U: FromRow<'a, R>,
-    {
+    pub(crate) async fn pull_row(&mut self) -> Result<Option<Row>> {
         let msg = self.receive_unhandled().await?;
         match msg.prefix() {
             CommandComplete::PREFIX | EmptyQueryResponse::PREFIX => (),
             DataRow::PREFIX => {
-                let row = Row::new(self.buffer.parse(&msg)?);
-                return U::from_row(row).map(Some);
+                return Ok(Some(Row::new(self.buffer.parse(&msg)?)));
             }
             n => return Err(unexpected_message_prefix(n)),
         }
-        self.buffer.clear();
 
         let msg = self.receive_unhandled().await?;
         match msg.prefix() {
@@ -358,6 +353,10 @@ impl<T> DerefMut for SyncConnection<T> {
 }
 
 #[cfg(any(feature = "bb8", feature = "deadpool", feature = "r2d2"))]
+#[cfg_attr(
+    docsrs,
+    doc(cfg(any(feature = "bb8", feature = "deadpool", feature = "r2d2")))
+)]
 pub struct ConnectionManager<T> {
     config: Config,
     _marker: std::marker::PhantomData<fn(T)>,

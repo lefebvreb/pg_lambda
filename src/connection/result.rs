@@ -19,6 +19,19 @@ impl<'a> Row<'a> {
     pub(crate) fn new(data: DataRow<'a>) -> Self {
         Self { inner: data }
     }
+
+    fn next_parsed<T, U>(&mut self) -> Result<U>
+    where
+        T: PgType,
+        U: FromPgValue<'a, T>,
+    {
+        match self.next() {
+            Some(Ok(Some(src))) => U::read(src),
+            Some(Ok(None)) => U::null(),
+            Some(Err(err)) => Err(err),
+            None => Err(Error::new(ErrorKind::InvalidData, "unexpected end of row")),
+        }
+    }
 }
 
 impl<'a> Iterator for Row<'a> {
@@ -35,6 +48,10 @@ impl<'a> Iterator for Row<'a> {
             Err(err) => Err(err),
         })
     }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.inner.len as usize, None)
+    }
 }
 
 impl FusedIterator for Row<'_> {}
@@ -49,15 +66,6 @@ impl FromRow<'_, ()> for () {
     }
 }
 
-fn next_column<'a, T: PgType, U: FromPgValue<'a, T>>(row: &mut Row<'a>) -> Result<U> {
-    match row.next() {
-        Some(Ok(Some(src))) => U::read(src),
-        Some(Ok(None)) => U::null(),
-        Some(Err(err)) => Err(err),
-        None => Err(Error::new(ErrorKind::InvalidData, "unexpected end of row")),
-    }
-}
-
 macro_rules! impl_from_row {
     {
         $($t:ident $u:ident)*
@@ -66,7 +74,7 @@ macro_rules! impl_from_row {
             fn from_row(mut row: Row<'a>) -> Result<Self> {
                 Ok((
                     $(
-                        next_column::<$t, $u>(&mut row)?,
+                        row.next_parsed::<$t, $u>()?,
                     )*
                 ))
             }
@@ -111,8 +119,16 @@ pub trait FromQueryResult<'a, R, T: Transport>: Sized + 'a {
 }
 
 impl<T: Transport> FromQueryResult<'_, Void, T> for () {
-    async fn from_conn(_: &mut Connection<T>) -> Result<Self> {
-        Ok(())
+    async fn from_conn(conn: &mut Connection<T>) -> Result<Self> {
+        let res = match conn.pull_row().await? {
+            Some(_) => Err(Error::new(
+                ErrorKind::InvalidData,
+                "unexpected non-empty query result",
+            )),
+            None => Ok(()),
+        };
+        conn.buffer.clear();
+        res
     }
 }
 
@@ -160,7 +176,7 @@ pub struct QueryStream<R, U, T> {
     _marker: PhantomData<(R, U)>,
 }
 
-impl<'a, R, U: FromRow<'a, R>, T: Transport> QueryStream<R, U, T> {
+impl<R, U, T: Transport> QueryStream<R, U, T> {
     fn new(conn: &mut Connection<T>) -> &mut Self {
         // SAFETY: `QueryStream<R, U, T>` is a `#[repr(transparent)]` wrapper over
         // a `Connection<T>`, it is therefore safe to transmute a mutable reference
@@ -168,17 +184,29 @@ impl<'a, R, U: FromRow<'a, R>, T: Transport> QueryStream<R, U, T> {
         unsafe { transmute::<&mut Connection<T>, &mut QueryStream<R, U, T>>(conn) }
     }
 
-    pub async fn next(&'a mut self) -> Result<Option<U>> {
+    pub async fn next<'a>(&'a mut self) -> Option<Result<U>>
+    where
+        U: FromRow<'a, R>,
+    {
         self.inner.buffer.clear();
-        self.inner.next_row().await
+        match self.inner.pull_row().await {
+            Ok(Some(row)) => Some(U::from_row(row)),
+            Ok(None) => None,
+            Err(err) => Some(Err(err)),
+        }
     }
 
-    // pub async fn collect(&mut self) -> Result<Vec<U>>
-    // where
-    //     U: 'static,
-    // {
-    //     todo!()
-    // }
+    pub async fn collect(&mut self) -> Result<Vec<U>>
+    where
+        U: for<'x> FromRow<'x, R>,
+    {
+        let mut res = Vec::new();
+        while let Some(val) = self.next().await {
+            res.push(val?);
+        }
+        self.inner.buffer.clear();
+        Ok(res)
+    }
 }
 
 impl<'a, R, U: FromRow<'a, R>, T: Transport> FromQueryResult<'a, SetOf<R>, T>
@@ -194,7 +222,7 @@ pub struct QueryIter<R, U, T> {
     inner: QueryStream<R, U, T>,
 }
 
-impl<'a, R, U: FromRow<'a, R>, T: Transport> QueryIter<R, U, T> {
+impl<R, U, T: SyncTransport> QueryIter<R, U, T> {
     fn new(conn: &mut Connection<T>) -> &mut Self {
         // SAFETY: `QueryIter<R, U, T>` is a `#[repr(transparent)]` wrapper over
         // a `Connection<T>`, it is therefore safe to transmute a mutable reference
@@ -203,9 +231,22 @@ impl<'a, R, U: FromRow<'a, R>, T: Transport> QueryIter<R, U, T> {
     }
 
     #[allow(clippy::should_implement_trait)]
-    pub fn next(&'a mut self) -> Result<Option<U>> {
+    pub fn next<'a>(&'a mut self) -> Option<Result<U>>
+    where
+        U: FromRow<'a, R>,
+    {
         self.inner
             .next()
+            .now_or_never()
+            .expect("future should resolve immediately")
+    }
+
+    pub fn collect(&mut self) -> Result<Vec<U>>
+    where
+        U: for<'x> FromRow<'x, R>,
+    {
+        self.inner
+            .collect()
             .now_or_never()
             .expect("future should resolve immediately")
     }

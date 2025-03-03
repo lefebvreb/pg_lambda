@@ -37,3 +37,8 @@ path = "pg_lambda_macros"
 [dev-dependencies]
 fastrand = { version = "2.3.0", default-features = false, features = ["std"] }
 futures = { version = "*", default-features = false, features = ["executor"] }
+
+[package.metadata.docs.rs]
+# To test-build documentation, use:
+# cargo +nightly rustdoc --all-features --open -- -Z unstable-options --cfg docsrs --generate-link-to-definition
+rustdoc-args = ["--cfg", "docsrs", "--generate-link-to-definition"]

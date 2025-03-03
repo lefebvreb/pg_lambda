@@ -39,6 +39,7 @@ impl TransportSend for tokio::net::TcpStream {
 }
 
 #[cfg(feature = "bb8")]
+#[cfg_attr(docsrs, doc(cfg(feature = "bb8")))]
 impl<T: TransportSend + 'static> bb8::ManageConnection for super::ConnectionManager<T> {
     type Connection = super::Connection<T>;
 
@@ -63,6 +64,7 @@ impl<T: TransportSend + 'static> bb8::ManageConnection for super::ConnectionMana
 }
 
 #[cfg(feature = "deadpool")]
+#[cfg_attr(docsrs, doc(cfg(feature = "deadpool")))]
 impl<T: TransportSend> deadpool::managed::Manager for super::ConnectionManager<T> {
     type Type = super::Connection<T>;
 
@@ -84,6 +86,7 @@ impl<T: TransportSend> deadpool::managed::Manager for super::ConnectionManager<T
 }
 
 #[cfg(feature = "r2d2")]
+#[cfg_attr(docsrs, doc(cfg(feature = "r2d2")))]
 impl<T: TransportSend + SyncTransport + 'static> r2d2::ManageConnection
     for super::ConnectionManager<T>
 {
