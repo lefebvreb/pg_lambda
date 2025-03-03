@@ -260,10 +260,6 @@ impl<T: Transport> Connection<T> {
         Ok(())
     }
 
-    pub fn is_closed(&self) -> bool {
-        self.buffer.is_closed()
-    }
-
     pub(crate) async fn next_row<'a, R, U>(&'a mut self) -> Result<Option<U>>
     where
         U: FromRow<'a, R>,
@@ -284,9 +280,20 @@ impl<T: Transport> Connection<T> {
             ReadyForQuery::PREFIX => {
                 self.ready_for_query = true;
                 Ok(None)
-            },
+            }
             n => Err(unexpected_message_prefix(n)),
         }
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.buffer.is_closed()
+    }
+
+    pub fn into_sync(self) -> SyncConnection<T>
+    where
+        T: SyncTransport,
+    {
+        SyncConnection { inner: self }
     }
 }
 
@@ -329,6 +336,10 @@ impl<T: SyncTransport> SyncConnection<T> {
             .terminate()
             .now_or_never()
             .expect("future should resolve immediately")
+    }
+
+    pub fn into_async(self) -> Connection<T> {
+        self.inner
     }
 }
 
