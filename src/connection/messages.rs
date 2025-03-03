@@ -392,16 +392,3 @@ impl FrontendMessage for Sync {
         Ok(())
     }
 }
-
-// TERMINATION
-
-/// https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-TERMINATE
-pub struct Terminate;
-
-impl FrontendMessage for Terminate {
-    const PREFIX: Option<u8> = Some(b'X');
-
-    fn write(self, _: &mut Vec<u8>) -> Result<()> {
-        Ok(())
-    }
-}

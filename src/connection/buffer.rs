@@ -26,14 +26,8 @@ impl MessageWriter<'_> {
 }
 
 pub struct AnyMessage {
-    prefix: u8,
+    pub prefix: u8,
     body: Range<usize>,
-}
-
-impl AnyMessage {
-    pub fn prefix(&self) -> u8 {
-        self.prefix
-    }
 }
 
 #[derive(Debug)]
@@ -42,7 +36,7 @@ enum State {
     Closed,
     Sending { total: i32, remaining: i32 },
     ReceivingHead { remaining: i32 },
-    ReceivingBody { size: i32, remaining: i32 },
+    ReceivingBody { total: i32, remaining: i32 },
 }
 
 #[derive(Debug)]
@@ -72,6 +66,10 @@ impl<T: Transport> Buffer<T> {
 
     pub fn clear(&mut self) {
         self.stack.clear();
+    }
+
+    pub fn cut(&mut self, msg: &AnyMessage) {
+        self.stack.truncate(msg.body.start - 5);
     }
 
     pub fn is_closed(&self) -> bool {
@@ -134,25 +132,27 @@ impl<T: Transport> Buffer<T> {
             self.state = State::ReceivingHead { remaining };
         }
 
-        let size = i32::from_be_bytes(self.stack[(self.stack.len() - 4)..].try_into().unwrap()) - 4;
-
-        if size > 0 {
-            self.state = State::ReceivingBody {
-                size,
-                remaining: size,
-            };
-            self.extend_buffer(size);
-            self.receive_body(size, size).await
-        } else {
-            self.state = State::Idle;
-            Ok(AnyMessage {
-                prefix: self.stack[self.stack.len() - 5],
-                body: Range::default(),
-            })
+        match i32::from_be_bytes(self.stack[(self.stack.len() - 4)..].try_into().unwrap()) {
+            4 => {
+                self.state = State::Idle;
+                Ok(AnyMessage {
+                    prefix: self.stack[self.stack.len() - 5],
+                    body: Range::default(),
+                })
+            }
+            size => {
+                let total = size - 4;
+                self.state = State::ReceivingBody {
+                    total,
+                    remaining: total,
+                };
+                self.extend_buffer(total);
+                self.receive_body(total, total).await
+            }
         }
     }
 
-    async fn receive_body(&mut self, size: i32, mut remaining: i32) -> Result<AnyMessage> {
+    async fn receive_body(&mut self, total: i32, mut remaining: i32) -> Result<AnyMessage> {
         loop {
             let range = (self.stack.len() - remaining as usize)..;
             match self.transport.read(&mut self.stack[range]).await? {
@@ -160,13 +160,13 @@ impl<T: Transport> Buffer<T> {
                 n if n == remaining => break,
                 n => remaining -= n,
             }
-            self.state = State::ReceivingBody { size, remaining };
+            self.state = State::ReceivingBody { total, remaining };
         }
 
         self.state = State::Idle;
         Ok(AnyMessage {
-            prefix: self.stack[self.stack.len() - size as usize - 5],
-            body: (self.stack.len() - size as usize)..self.stack.len(),
+            prefix: self.stack[self.stack.len() - total as usize - 5],
+            body: (self.stack.len() - total as usize)..self.stack.len(),
         })
     }
 
@@ -176,7 +176,10 @@ impl<T: Transport> Buffer<T> {
             State::Closed => return Err(closed_transport()),
             State::Sending { total, remaining } => self.send_bytes(total, remaining).await?,
             State::ReceivingHead { remaining } => return self.receive_head(remaining).await,
-            State::ReceivingBody { size, remaining } => {
+            State::ReceivingBody {
+                total: size,
+                remaining,
+            } => {
                 return self.receive_body(size, remaining).await;
             }
         }

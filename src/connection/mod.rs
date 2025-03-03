@@ -8,10 +8,10 @@ use messages::{
     Authentication, BackendKeyData, BackendMessage, Bind, BindComplete, CommandComplete, DataRow,
     EmptyQueryResponse, ErrorResponse, Execute, NegotiateProtocolVersion, NoticeResponse,
     ParameterStatus, Parse, ParseComplete, ReadyForQuery, SaslInitialResponse, SaslResponse,
-    StartupMessage, Sync, Terminate,
+    StartupMessage, Sync,
 };
 use params::QueryParams;
-use result::{FromQueryResult, Row};
+use result::{FromQueryResult, FromRow, Row};
 use rsasl::config::SASLConfig;
 use rsasl::prelude::{Mechname, SASLClient};
 use util::{from_session_error, unexpected_authentication_message, unexpected_message_prefix};
@@ -61,27 +61,21 @@ impl<T: Transport> Connection<T> {
     async fn receive_unhandled(&mut self) -> Result<AnyMessage> {
         loop {
             let msg = self.buffer.receive_any().await?;
-            match msg.prefix() {
-                ErrorResponse::PREFIX => {
-                    let err = self
-                        .buffer
-                        .parse::<ErrorResponse>(&msg)
-                        .map_or_else(identity, Error::from);
-                    self.buffer.clear();
-                    return Err(err);
-                }
-                NegotiateProtocolVersion::PREFIX => {
-                    let err = self
-                        .buffer
-                        .parse::<NegotiateProtocolVersion>(&msg)
-                        .map_or_else(identity, Error::from);
-                    self.buffer.clear();
-                    return Err(err);
-                }
-                // todo: handle these better.
-                NoticeResponse::PREFIX | ParameterStatus::PREFIX => self.buffer.clear(),
+            // todo: handle these better.
+            let res = match msg.prefix {
+                ErrorResponse::PREFIX => Err(self
+                    .buffer
+                    .parse::<ErrorResponse>(&msg)
+                    .map_or_else(identity, Error::from)),
+                NegotiateProtocolVersion::PREFIX => Err(self
+                    .buffer
+                    .parse::<NegotiateProtocolVersion>(&msg)
+                    .map_or_else(identity, Error::from)),
+                NoticeResponse::PREFIX | ParameterStatus::PREFIX => Ok(()),
                 _ => return Ok(msg),
-            }
+            };
+            self.buffer.cut(&msg);
+            res?;
         }
     }
 
@@ -113,28 +107,28 @@ impl<T: Transport> Connection<T> {
 
         loop {
             let msg = self.receive_unhandled().await?;
-            match msg.prefix() {
-                Authentication::PREFIX => match self.buffer.parse(&msg)? {
-                    Authentication::Ok => return Ok(()),
-                    Authentication::SaslContinue { data } => {
-                        let state = session
-                            .step(Some(data), &mut buf)
-                            .map_err(from_session_error)?;
-                        if state.is_running() {
-                            self.buffer
-                                .send_all(|mut writer| {
-                                    writer.add(SaslResponse {
-                                        data: buf.as_slice(),
-                                    })
+            if msg.prefix != Authentication::PREFIX {
+                return Err(unexpected_message_prefix(msg.prefix));
+            }
+            match self.buffer.parse(&msg)? {
+                Authentication::Ok => return Ok(()),
+                Authentication::SaslContinue { data } => {
+                    let state = session
+                        .step(Some(data), &mut buf)
+                        .map_err(from_session_error)?;
+                    if state.is_running() {
+                        self.buffer
+                            .send_all(|mut writer| {
+                                writer.add(SaslResponse {
+                                    data: buf.as_slice(),
                                 })
-                                .await?;
-                            buf.clear();
-                        }
+                            })
+                            .await?;
+                        buf.clear();
                     }
-                    Authentication::SaslFinal => (),
-                    _ => return Err(unexpected_authentication_message()),
-                },
-                n => return Err(unexpected_message_prefix(n)),
+                }
+                Authentication::SaslFinal => (),
+                _ => return Err(unexpected_authentication_message()),
             }
         }
     }
@@ -157,36 +151,34 @@ impl<T: Transport> Connection<T> {
 
         // Wait for Authenticate
         let msg = this.receive_unhandled().await?;
-        match msg.prefix() {
-            Authentication::PREFIX => match this.buffer.parse(&msg)? {
-                Authentication::Ok => (),
-                Authentication::Sasl { mechanisms } => {
-                    let mechanisms = mechanisms
-                        .into_iter()
-                        .map(|mechanism| mechanism.to_bytes().into())
-                        .collect();
-                    this.sasl(config, mechanisms).await?;
-                }
-                _ => return Err(unexpected_authentication_message()),
-            },
-            n => return Err(unexpected_message_prefix(n)),
+        if msg.prefix != Authentication::PREFIX {
+            return Err(unexpected_message_prefix(msg.prefix));
+        }
+        match this.buffer.parse(&msg)? {
+            Authentication::Ok => (),
+            Authentication::Sasl { mechanisms } => {
+                let mechanisms = mechanisms
+                    .into_iter()
+                    .map(|mechanism| mechanism.to_bytes().into())
+                    .collect();
+                this.sasl(config, mechanisms).await?;
+            }
+            _ => return Err(unexpected_authentication_message()),
         }
         this.buffer.clear();
 
         // Wait for BackendKeyData
         let msg = this.receive_unhandled().await?;
-        match msg.prefix() {
-            BackendKeyData::PREFIX => (),
-            n => return Err(unexpected_message_prefix(n)),
-        };
+        if msg.prefix != BackendKeyData::PREFIX {
+            return Err(unexpected_message_prefix(msg.prefix));
+        }
         this.buffer.clear();
 
         // Wait for ReadyForQuery
         let msg = this.receive_unhandled().await?;
-        match msg.prefix() {
-            ReadyForQuery::PREFIX => (),
-            n => return Err(unexpected_message_prefix(n)),
-        };
+        if msg.prefix != ReadyForQuery::PREFIX {
+            return Err(unexpected_message_prefix(msg.prefix));
+        }
         this.buffer.clear();
 
         Ok(this)
@@ -216,17 +208,15 @@ impl<T: Transport> Connection<T> {
 
         // Waits for ParseComplete
         let msg = self.receive_unhandled().await?;
-        match msg.prefix() {
-            ParseComplete::PREFIX => (),
-            n => return Err(unexpected_message_prefix(n)),
+        if msg.prefix != ParseComplete::PREFIX {
+            return Err(unexpected_message_prefix(msg.prefix));
         }
         self.buffer.clear();
 
         // Waits for BindComplete
         let msg = self.receive_unhandled().await?;
-        match msg.prefix() {
-            BindComplete::PREFIX => (),
-            n => return Err(unexpected_message_prefix(n)),
+        if msg.prefix != BindComplete::PREFIX {
+            return Err(unexpected_message_prefix(msg.prefix));
         }
         self.buffer.clear();
 
@@ -235,12 +225,14 @@ impl<T: Transport> Connection<T> {
 
     pub async fn recycle(&mut self) -> Result<()> {
         if self.ready_for_query {
+            // Would it be OK to cut/clear the buffer here?
             return Ok(());
         }
 
         loop {
             let msg = self.receive_unhandled().await?;
-            match msg.prefix() {
+            self.buffer.clear();
+            match msg.prefix {
                 ReadyForQuery::PREFIX => {
                     self.ready_for_query = true;
                     return Ok(());
@@ -248,35 +240,6 @@ impl<T: Transport> Connection<T> {
                 CommandComplete::PREFIX | EmptyQueryResponse::PREFIX | DataRow::PREFIX => (),
                 n => return Err(unexpected_message_prefix(n)),
             }
-            self.buffer.clear();
-        }
-    }
-
-    pub async fn terminate(mut self) -> Result<()> {
-        self.recycle().await?;
-        self.buffer
-            .send_all(|mut writer| writer.add(Terminate))
-            .await?;
-        Ok(())
-    }
-
-    pub(crate) async fn pull_row(&mut self) -> Result<Option<Row>> {
-        let msg = self.receive_unhandled().await?;
-        match msg.prefix() {
-            CommandComplete::PREFIX | EmptyQueryResponse::PREFIX => (),
-            DataRow::PREFIX => {
-                return Ok(Some(Row::new(self.buffer.parse(&msg)?)));
-            }
-            n => return Err(unexpected_message_prefix(n)),
-        }
-
-        let msg = self.receive_unhandled().await?;
-        match msg.prefix() {
-            ReadyForQuery::PREFIX => {
-                self.ready_for_query = true;
-                Ok(None)
-            }
-            n => Err(unexpected_message_prefix(n)),
         }
     }
 
@@ -289,6 +252,36 @@ impl<T: Transport> Connection<T> {
         T: SyncTransport,
     {
         SyncConnection { inner: self }
+    }
+
+    async fn next_row(&mut self) -> Result<Option<AnyMessage>> {
+        let msg = self.receive_unhandled().await?;
+        let res = match msg.prefix {
+            CommandComplete::PREFIX | EmptyQueryResponse::PREFIX => Ok(None),
+            DataRow::PREFIX => return Ok(Some(msg)),
+            n => Err(unexpected_message_prefix(n)),
+        };
+        self.buffer.cut(&msg);
+        res
+    }
+
+    fn parse_row<'a, R, U>(&'a self, msg: &AnyMessage) -> Result<U>
+    where
+        U: FromRow<'a, R>,
+    {
+        self.buffer.parse(msg).map(Row::new).and_then(U::from_row)
+    }
+
+    async fn end_query(&mut self) -> Result<()> {
+        let msg = self.receive_unhandled().await?;
+        self.buffer.cut(&msg);
+        match msg.prefix {
+            ReadyForQuery::PREFIX => {
+                self.ready_for_query = true;
+                Ok(())
+            }
+            n => Err(unexpected_message_prefix(n)),
+        }
     }
 }
 
@@ -319,16 +312,6 @@ impl<T: SyncTransport> SyncConnection<T> {
     pub fn recycle(&mut self) -> Result<()> {
         self.inner
             .recycle()
-            .now_or_never()
-            .expect("future should resolve immediately")
-    }
-
-    pub fn terminate(self) -> Result<()>
-    where
-        T: SyncTransport,
-    {
-        self.inner
-            .terminate()
             .now_or_never()
             .expect("future should resolve immediately")
     }

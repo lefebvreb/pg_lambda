@@ -110,10 +110,10 @@ pub fn from_session_error(e: SessionError) -> Error {
     )
 }
 
-pub fn unexpected_message_prefix(n: u8) -> Error {
+pub fn unexpected_message_prefix(prefix: u8) -> Error {
     Error::new(
         ErrorKind::InvalidData,
-        format!("unknown backend message byte: 0x{n:x}"),
+        format!("unknown backend message byte: 0x{prefix:x}"),
     )
 }
 

@@ -120,15 +120,11 @@ pub trait FromQueryResult<'a, R, T: Transport>: Sized + 'a {
 
 impl<T: Transport> FromQueryResult<'_, Void, T> for () {
     async fn from_conn(conn: &mut Connection<T>) -> Result<Self> {
-        let res = match conn.pull_row().await? {
-            Some(_) => Err(Error::new(
-                ErrorKind::InvalidData,
-                "unexpected non-empty query result",
-            )),
-            None => Ok(()),
-        };
-        conn.buffer.clear();
-        res
+        let is_empty = conn.next_row().await?.is_none();
+        conn.end_query().await?;
+        is_empty
+            .then_some(())
+            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "unexpected non-empty query result"))
     }
 }
 
@@ -137,15 +133,13 @@ pub struct Single<R: 'static>(PhantomData<R>);
 
 impl<'a, R, U: FromRow<'a, R>, T: Transport> FromQueryResult<'a, Single<R>, T> for U {
     async fn from_conn(conn: &'a mut Connection<T>) -> Result<Self> {
-        // // todo: figure out a way to pull the first None that comes right after this
-        // match stream.next().await? {
-        //     Some(val) => Ok(val),
-        //     None => Err(Error::new(
-        //         ErrorKind::UnexpectedEof,
-        //         "unexpected empty query result",
-        //     )),
-        // }
-        todo!()
+        let msg = conn
+            .next_row()
+            .await?
+            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "unexpected empty query result"))?;
+        if conn.next_row().await?.is_some() {}
+        conn.end_query().await?;
+        conn.parse_row(&msg)
     }
 }
 
@@ -189,8 +183,8 @@ impl<R, U, T: Transport> QueryStream<R, U, T> {
         U: FromRow<'a, R>,
     {
         self.inner.buffer.clear();
-        match self.inner.pull_row().await {
-            Ok(Some(row)) => Some(U::from_row(row)),
+        match self.inner.next_row().await {
+            Ok(Some(msg)) => Some(self.inner.parse_row(&msg)),
             Ok(None) => None,
             Err(err) => Some(Err(err)),
         }
@@ -204,7 +198,7 @@ impl<R, U, T: Transport> QueryStream<R, U, T> {
         while let Some(val) = self.next().await {
             res.push(val?);
         }
-        self.inner.buffer.clear();
+        self.inner.end_query().await?;
         Ok(res)
     }
 }
