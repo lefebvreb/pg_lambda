@@ -1,9 +1,10 @@
 use std::io::{Error, ErrorKind, Result};
-use std::iter::FusedIterator;
+use std::iter::{FusedIterator, from_fn};
 use std::marker::PhantomData;
 use std::mem::transmute;
 
-use futures::FutureExt;
+use futures::stream::unfold;
+use futures::{FutureExt, Stream};
 
 use crate::types::{FromPgValue, PgType};
 
@@ -38,7 +39,7 @@ impl<'a> Iterator for Row<'a> {
     type Item = Result<Option<&'a [u8]>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.inner.len == 0 {
+        if self.len() == 0 {
             return None;
         }
         self.inner.len -= 1;
@@ -50,7 +51,14 @@ impl<'a> Iterator for Row<'a> {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.inner.len as usize, None)
+        let len = self.len();
+        (len, Some(len))
+    }
+}
+
+impl ExactSizeIterator for Row<'_> {
+    fn len(&self) -> usize {
+        self.inner.len as usize
     }
 }
 
@@ -120,10 +128,9 @@ pub trait FromQueryResult<'a, R, T: Transport>: Sized + 'a {
 
 impl<T: Transport> FromQueryResult<'_, Void, T> for () {
     async fn from_conn(conn: &mut Connection<T>) -> Result<Self> {
-        let is_empty = conn.next_row().await?.is_none();
-        conn.end_query().await?;
-        is_empty
-            .then_some(())
+        conn.next_row()
+            .await?
+            .map(|_| ())
             .ok_or_else(|| Error::new(ErrorKind::InvalidData, "unexpected non-empty query result"))
     }
 }
@@ -137,8 +144,12 @@ impl<'a, R, U: FromRow<'a, R>, T: Transport> FromQueryResult<'a, Single<R>, T> f
             .next_row()
             .await?
             .ok_or_else(|| Error::new(ErrorKind::InvalidData, "unexpected empty query result"))?;
-        if conn.next_row().await?.is_some() {}
-        conn.end_query().await?;
+        if conn.next_row().await?.is_some() {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "unexpected second row in query result",
+            ));
+        }
         conn.parse_row(&msg)
     }
 }
@@ -148,12 +159,11 @@ pub struct SetOf<R: 'static>(PhantomData<R>);
 
 impl<'a, R, U: FromRow<'a, R>, T: Transport> FromQueryResult<'a, SetOf<R>, T> for Vec<U> {
     async fn from_conn(conn: &'a mut Connection<T>) -> Result<Self> {
-        // let mut res = Vec::new();
-        // while let Some(val) = stream.next().await? {
-        //     res.push(val);
-        // }
-        // Ok(res)
-        todo!()
+        let mut res = Vec::new();
+        while let Some(msg) = conn.next_row().await? {
+            res.push(msg);
+        }
+        res.into_iter().map(|msg| conn.parse_row(&msg)).collect()
     }
 }
 
@@ -182,7 +192,8 @@ impl<R, U, T: Transport> QueryStream<R, U, T> {
     where
         U: FromRow<'a, R>,
     {
-        self.inner.buffer.clear();
+        // todo: needs to clear the buffer, but can't do it at the start of the method
+        // in case of a partial message.
         match self.inner.next_row().await {
             Ok(Some(msg)) => Some(self.inner.parse_row(&msg)),
             Ok(None) => None,
@@ -190,6 +201,7 @@ impl<R, U, T: Transport> QueryStream<R, U, T> {
         }
     }
 
+    // todo: implement this with into_std_stream and StreamExt maybe?
     pub async fn collect(&mut self) -> Result<Vec<U>>
     where
         U: for<'x> FromRow<'x, R>,
@@ -198,8 +210,16 @@ impl<R, U, T: Transport> QueryStream<R, U, T> {
         while let Some(val) = self.next().await {
             res.push(val?);
         }
-        self.inner.end_query().await?;
         Ok(res)
+    }
+
+    pub fn into_std_stream(&mut self) -> impl Stream<Item = Result<U>>
+    where
+        U: for<'x> FromRow<'x, R>,
+    {
+        unfold(self, move |this| async {
+            this.next().await.map(|val| (val, this))
+        })
     }
 }
 
@@ -211,6 +231,13 @@ impl<'a, R, U: FromRow<'a, R>, T: Transport> FromQueryResult<'a, SetOf<R>, T>
     }
 }
 
+/// An iterator over rows produced as a result of a query.
+///
+/// # Why is this not a regular [`Iterator`](std::iter::Iterator)?
+///
+/// Values returned by [`QueryIter`] hold a reference to the buffer that
+/// is inside the underlying [`Connection`]. This pattern in rust is
+/// called a "lending iterator", and is not well supported by the Rust ecosystem.
 #[repr(transparent)]
 pub struct QueryIter<R, U, T> {
     inner: QueryStream<R, U, T>,
@@ -243,6 +270,13 @@ impl<R, U, T: SyncTransport> QueryIter<R, U, T> {
             .collect()
             .now_or_never()
             .expect("future should resolve immediately")
+    }
+
+    pub fn into_std_iter(&mut self) -> impl Iterator<Item = Result<U>>
+    where
+        U: for<'x> FromRow<'x, R>,
+    {
+        from_fn(|| self.next())
     }
 }
 

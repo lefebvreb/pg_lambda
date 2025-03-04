@@ -33,12 +33,50 @@ pub struct Config {
     pub port: u16,
 }
 
+/// Types that can be used as transport layers for [`Connection`]s.
+///
+/// This trait abstracts connection, reading and writing to a
+/// PostgreSQL instance.
 #[trait_variant::make(TransportSend: Send)]
 pub trait Transport: Sized {
+    /// Attempts to connect to the database described in `config`.
+    ///
+    /// Multiple hosts and ports may be tested. If a TLS handshake
+    /// is desired, this function must take care of the appropriate
+    /// negociations with the PostgreSQL instance on the other end
+    /// of the line.
+    ///
+    /// # Cancel safety
+    ///
+    /// This method may be cancel unsafe.
     async fn connect(config: &Config) -> Result<Self>;
 
+    /// Attempts to read some of the bytes from the network into `dst`.
+    ///
+    /// In case of success, the number of bytes read into `dst` must
+    /// be returned. In case of failure, no bytes must have been read at all.
+    ///
+    /// Returning `0` means the connection was closed by the database and must
+    /// not be used again.
+    ///
+    /// # Cancel safety
+    ///
+    /// This method must be cancel safe, no bytes must have been read in
+    /// case of cancellation.
     async fn read(&mut self, dst: &mut [u8]) -> Result<i32>;
 
+    /// Attempts to write some bytes to the network from `src`.
+    ///
+    /// In case of success, the number of bytes written from `src` must
+    /// be returned. In case of failure, no bytes must have been written at all.
+    ///
+    /// Returning `0` means the connection was closed by the database and must
+    /// not be used again.
+    ///
+    /// # Cancel safety
+    ///
+    /// This method must be cancel safe, no bytes must have been written in
+    /// case of cancellation.
     async fn write(&mut self, src: &[u8]) -> Result<i32>;
 }
 
@@ -133,6 +171,7 @@ impl<T: Transport> Connection<T> {
         }
     }
 
+    // Stack after successful connect: ( ∅ )
     pub async fn connect(config: &Config) -> Result<Self> {
         let mut this = Self {
             buffer: Buffer::new(T::connect(config).await?),
@@ -161,6 +200,7 @@ impl<T: Transport> Connection<T> {
                     .into_iter()
                     .map(|mechanism| mechanism.to_bytes().into())
                     .collect();
+                this.buffer.clear();
                 this.sasl(config, mechanisms).await?;
             }
             _ => return Err(unexpected_authentication_message()),
@@ -208,39 +248,35 @@ impl<T: Transport> Connection<T> {
 
         // Waits for ParseComplete
         let msg = self.receive_unhandled().await?;
+        self.buffer.clear();
         if msg.prefix != ParseComplete::PREFIX {
             return Err(unexpected_message_prefix(msg.prefix));
         }
-        self.buffer.clear();
 
         // Waits for BindComplete
         let msg = self.receive_unhandled().await?;
+        self.buffer.clear();
         if msg.prefix != BindComplete::PREFIX {
             return Err(unexpected_message_prefix(msg.prefix));
         }
-        self.buffer.clear();
 
         U::from_conn(self).await
     }
 
     pub async fn recycle(&mut self) -> Result<()> {
-        if self.ready_for_query {
-            // Would it be OK to cut/clear the buffer here?
-            return Ok(());
-        }
-
-        loop {
+        while !self.ready_for_query {
             let msg = self.receive_unhandled().await?;
             self.buffer.clear();
             match msg.prefix {
-                ReadyForQuery::PREFIX => {
-                    self.ready_for_query = true;
-                    return Ok(());
-                }
+                ReadyForQuery::PREFIX => self.ready_for_query = true,
                 CommandComplete::PREFIX | EmptyQueryResponse::PREFIX | DataRow::PREFIX => (),
                 n => return Err(unexpected_message_prefix(n)),
             }
         }
+
+        // here: downsize buffer and other cleanup things.
+
+        Ok(())
     }
 
     pub fn is_closed(&self) -> bool {
@@ -255,10 +291,30 @@ impl<T: Transport> Connection<T> {
     }
 
     async fn next_row(&mut self) -> Result<Option<AnyMessage>> {
+        if self.ready_for_query {
+            return Ok(None);
+        }
+
         let msg = self.receive_unhandled().await?;
         let res = match msg.prefix {
-            CommandComplete::PREFIX | EmptyQueryResponse::PREFIX => Ok(None),
+            // Another row was produced, it is appended to the buffer, so simply return it.
             DataRow::PREFIX => return Ok(Some(msg)),
+            // Query is finished, we should receive a ReadyForQuery immediately after.
+            CommandComplete::PREFIX | EmptyQueryResponse::PREFIX => {
+                self.buffer.cut(&msg);
+                let msg = self.receive_unhandled().await?;
+                if msg.prefix != ReadyForQuery::PREFIX {
+                    Err(unexpected_message_prefix(msg.prefix))
+                } else {
+                    self.ready_for_query = true;
+                    Ok(None)
+                }
+            }
+            // Previous try to get a ReadyForQuery was most likely cancelled, so here we are again.
+            ReadyForQuery::PREFIX => {
+                self.ready_for_query = true;
+                Ok(None)
+            }
             n => Err(unexpected_message_prefix(n)),
         };
         self.buffer.cut(&msg);
@@ -270,18 +326,6 @@ impl<T: Transport> Connection<T> {
         U: FromRow<'a, R>,
     {
         self.buffer.parse(msg).map(Row::new).and_then(U::from_row)
-    }
-
-    async fn end_query(&mut self) -> Result<()> {
-        let msg = self.receive_unhandled().await?;
-        self.buffer.cut(&msg);
-        match msg.prefix {
-            ReadyForQuery::PREFIX => {
-                self.ready_for_query = true;
-                Ok(())
-            }
-            n => Err(unexpected_message_prefix(n)),
-        }
     }
 }
 
