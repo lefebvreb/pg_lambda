@@ -2,7 +2,7 @@ use std::convert::identity;
 use std::io::{Error, ErrorKind, Result};
 use std::ops::{Deref, DerefMut};
 
-use buffer::{AnyMessage, Buffer};
+use buffer::{AnyMessage, BufTransport};
 use futures::FutureExt;
 use messages::{
     Authentication, BackendKeyData, BackendMessage, Bind, BindComplete, CommandComplete, DataRow,
@@ -90,7 +90,7 @@ pub trait SyncTransport: Transport {}
 
 #[derive(Debug)]
 pub struct Connection<T> {
-    buffer: Buffer<T>,
+    buffer: BufTransport<T>,
     ready_for_query: bool,
 }
 
@@ -174,7 +174,7 @@ impl<T: Transport> Connection<T> {
     // Stack after successful connect: ( ∅ )
     pub async fn connect(config: &Config) -> Result<Self> {
         let mut this = Self {
-            buffer: Buffer::new(T::connect(config).await?),
+            buffer: BufTransport::new(T::connect(config).await?),
             ready_for_query: true,
         };
 

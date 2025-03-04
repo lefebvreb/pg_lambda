@@ -192,8 +192,10 @@ impl<R, U, T: Transport> QueryStream<R, U, T> {
     where
         U: FromRow<'a, R>,
     {
-        // todo: needs to clear the buffer, but can't do it at the start of the method
-        // in case of a partial message.
+        if !self.inner.buffer.has_partial_data() {
+            self.inner.buffer.clear();
+        }
+        
         match self.inner.next_row().await {
             Ok(Some(msg)) => Some(self.inner.parse_row(&msg)),
             Ok(None) => None,

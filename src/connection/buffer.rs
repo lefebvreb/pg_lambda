@@ -40,13 +40,14 @@ enum State {
 }
 
 #[derive(Debug)]
-pub struct Buffer<T> {
+pub struct BufTransport<T> {
     transport: T,
     stack: Vec<u8>,
     state: State,
 }
 
-impl<T: Transport> Buffer<T> {
+impl<T: Transport> BufTransport<T> {
+    /// Creates a new buffered transport.
     pub fn new(transport: T) -> Self {
         Self {
             transport,
@@ -55,31 +56,57 @@ impl<T: Transport> Buffer<T> {
         }
     }
 
-    fn extend_buffer(&mut self, additional: i32) {
-        self.stack.resize(self.stack.len() + additional as usize, 0);
-    }
-
-    fn set_closed(&mut self) -> Error {
-        self.state = State::Closed;
-        closed_transport()
-    }
-
+    /// Clears the entire stack.
+    /// 
+    /// Calling this if `self.has_partial_data()` will lead to issues.
     pub fn clear(&mut self) {
         self.stack.clear();
     }
 
+    /// Cuts this message and all subsequent ones from the stack.
+    /// 
+    /// Calling this if `self.has_partial_data()` will lead to issues.
     pub fn cut(&mut self, msg: &AnyMessage) {
         self.stack.truncate(msg.body.start - 5);
     }
 
+    /// Returns `true` iff the transport was closed.
     pub fn is_closed(&self) -> bool {
         matches!(self.state, State::Closed)
     }
 
+    /// Returns `true` iff the stack contains partial data that need to be sent or received at its end.
+    pub fn has_partial_data(&self) -> bool {
+        matches!(
+            self.state,
+            State::Sending { .. } | State::ReceivingHead { .. } | State::ReceivingBody { .. },
+        )
+    }
+
+    /// Parses the given message from the stack.
     pub fn parse<'a, M: BackendMessage<'a>>(&'a self, msg: &AnyMessage) -> Result<M> {
         M::read(&self.stack[msg.body.clone()])
     }
 
+    /// Appends `additional` zeroed bytes at the end of the stack.
+    /// 
+    /// Calling this if `self.has_partial_data()` will lead to issues.
+    fn extend_buffer(&mut self, additional: i32) {
+        self.stack.resize(self.stack.len() + additional as usize, 0);
+    }
+
+    /// Mark this buffered transport as closed and returns the corresponding error.
+    /// 
+    /// The database closing the connection instead of us is always an error.
+    fn set_closed(&mut self) -> Error {
+        self.state = State::Closed;
+        self.clear();
+        closed_transport()
+    }
+
+    /// Send some bytes from the end of the stack.
+    /// 
+    /// Will truncate them once it succeeds. May be resumed at a later point.
     async fn send_bytes(&mut self, total: i32, mut remaining: i32) -> Result<()> {
         loop {
             let range = (self.stack.len() - remaining as usize)..;
