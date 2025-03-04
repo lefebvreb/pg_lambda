@@ -63,7 +63,7 @@ pub trait Transport: Sized {
     ///
     /// This method must be cancel safe, no bytes must have been read in
     /// case of cancellation.
-    async fn read(&mut self, dst: &mut [u8]) -> Result<i32>;
+    async fn read(&mut self, dst: &mut [u8]) -> Result<usize>;
 
     /// Attempts to write some bytes to the network from `src`.
     ///
@@ -77,7 +77,7 @@ pub trait Transport: Sized {
     ///
     /// This method must be cancel safe, no bytes must have been written in
     /// case of cancellation.
-    async fn write(&mut self, src: &[u8]) -> Result<i32>;
+    async fn write(&mut self, src: &[u8]) -> Result<usize>;
 }
 
 /// Marker trait for [`Transport`] implementations that can be used in synchronous contexts.

@@ -8,12 +8,12 @@ impl TransportSend for TcpStream {
         Self::connect(format!("{}:{}", config.host, config.port))
     }
 
-    async fn read(&mut self, dst: &mut [u8]) -> Result<i32> {
-        Read::read(self, dst).map(|count| count as i32)
+    async fn read(&mut self, dst: &mut [u8]) -> Result<usize> {
+        Read::read(self, dst)
     }
 
-    async fn write(&mut self, src: &[u8]) -> Result<i32> {
-        Write::write(self, src).map(|count| count as i32)
+    async fn write(&mut self, src: &[u8]) -> Result<usize> {
+        Write::write(self, src)
     }
 }
 
@@ -25,16 +25,12 @@ impl TransportSend for tokio::net::TcpStream {
         Self::connect(format!("{}:{}", config.host, config.port)).await
     }
 
-    async fn read(&mut self, dst: &mut [u8]) -> Result<i32> {
-        tokio::io::AsyncReadExt::read(self, dst)
-            .await
-            .map(|count| count as i32)
+    async fn read(&mut self, dst: &mut [u8]) -> Result<usize> {
+        tokio::io::AsyncReadExt::read(self, dst).await
     }
 
-    async fn write(&mut self, src: &[u8]) -> Result<i32> {
-        tokio::io::AsyncWriteExt::write(self, src)
-            .await
-            .map(|count| count as i32)
+    async fn write(&mut self, src: &[u8]) -> Result<usize> {
+        tokio::io::AsyncWriteExt::write(self, src).await
     }
 }
 

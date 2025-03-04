@@ -130,7 +130,8 @@ impl<T: Transport> FromQueryResult<'_, Void, T> for () {
     async fn from_conn(conn: &mut Connection<T>) -> Result<Self> {
         conn.next_row()
             .await?
-            .map(|_| ())
+            .is_none()
+            .then_some(())
             .ok_or_else(|| Error::new(ErrorKind::InvalidData, "unexpected non-empty query result"))
     }
 }
@@ -195,24 +196,12 @@ impl<R, U, T: Transport> QueryStream<R, U, T> {
         if !self.inner.buffer.has_partial_data() {
             self.inner.buffer.clear();
         }
-        
+
         match self.inner.next_row().await {
             Ok(Some(msg)) => Some(self.inner.parse_row(&msg)),
             Ok(None) => None,
             Err(err) => Some(Err(err)),
         }
-    }
-
-    // todo: implement this with into_std_stream and StreamExt maybe?
-    pub async fn collect(&mut self) -> Result<Vec<U>>
-    where
-        U: for<'x> FromRow<'x, R>,
-    {
-        let mut res = Vec::new();
-        while let Some(val) = self.next().await {
-            res.push(val?);
-        }
-        Ok(res)
     }
 
     pub fn into_std_stream(&mut self) -> impl Stream<Item = Result<U>>
@@ -260,16 +249,6 @@ impl<R, U, T: SyncTransport> QueryIter<R, U, T> {
     {
         self.inner
             .next()
-            .now_or_never()
-            .expect("future should resolve immediately")
-    }
-
-    pub fn collect(&mut self) -> Result<Vec<U>>
-    where
-        U: for<'x> FromRow<'x, R>,
-    {
-        self.inner
-            .collect()
             .now_or_never()
             .expect("future should resolve immediately")
     }
