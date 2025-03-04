@@ -170,7 +170,7 @@ impl<'a, R, U: FromRow<'a, R>, T: Transport> FromQueryResult<'a, SetOf<R>, T> fo
 
 /// A stream of rows produced as a result of a query.
 ///
-/// # Why is this not a regular [`Stream`](futures::stream::Stream)?
+/// # Why is this not a regular [`Stream`]?
 ///
 /// Values returned by [`QueryStream`] hold a reference to the buffer that
 /// is inside the underlying [`Connection`]. This pattern in rust is
@@ -224,7 +224,7 @@ impl<'a, R, U: FromRow<'a, R>, T: Transport> FromQueryResult<'a, SetOf<R>, T>
 
 /// An iterator over rows produced as a result of a query.
 ///
-/// # Why is this not a regular [`Iterator`](std::iter::Iterator)?
+/// # Why is this not a regular [`Iterator`]?
 ///
 /// Values returned by [`QueryIter`] hold a reference to the buffer that
 /// is inside the underlying [`Connection`]. This pattern in rust is

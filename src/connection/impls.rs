@@ -20,6 +20,7 @@ impl TransportSend for TcpStream {
 impl SyncTransport for TcpStream {}
 
 #[cfg(feature = "tokio")]
+#[cfg_attr(docsrs, doc(cfg(feature = "tokio")))]
 impl TransportSend for tokio::net::TcpStream {
     async fn connect(config: &Config) -> Result<Self> {
         Self::connect(format!("{}:{}", config.host, config.port)).await
