@@ -21,8 +21,8 @@ fn empty_query() {
 fn echo_query() {
     util::test_database(async |config| {
         let mut conn = SyncConnection::<TcpStream>::connect(&config)?;
-        let (n,) = conn
-            .query::<Single<(Integer,)>, (i32,)>("SELECT $1 * 2", query_params!(Integer(&42i32)))?;
+        let n =
+            conn.query::<Single<Integer>, i32>("SELECT $1 * 2", query_params!(Integer(&42i32)))?;
         assert_eq!(n, 84);
         Ok(())
     });
