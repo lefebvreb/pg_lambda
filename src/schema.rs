@@ -238,8 +238,10 @@ impl Schema {
         &SCHEMA
     }
 
-    pub fn migrations(&self) -> Result<Migrations> {
-        todo!()
+    pub fn migrations(&self) -> Migrations {
+        Migrations {
+            schema: self,
+        }
     }
 
     // fn diff(&self, other: &Self) -> Box<[SchemaOp]> {
