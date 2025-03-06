@@ -74,6 +74,16 @@ impl FromRow<'_, ()> for () {
     }
 }
 
+impl<'a, T, U> FromRow<'a, T> for U
+where
+    T: PgType,
+    U: FromPgValue<'a, T>,
+{
+    fn from_row(mut row: Row<'a>) -> Result<Self> {
+        row.next_parsed()
+    }
+}
+
 macro_rules! impl_from_row {
     {
         $($t:ident $u:ident)*
@@ -109,12 +119,6 @@ macro_rules! for_all_tuples {
 }
 
 for_all_tuples!(impl_from_row);
-
-impl<'a, R> FromRow<'a, R> for Row<'a> {
-    fn from_row(row: Row<'a>) -> Result<Self> {
-        Ok(row)
-    }
-}
 
 // todo: make a FromRow derive for struct types
 
