@@ -1,12 +1,15 @@
 use std::borrow::Cow;
+use std::io::Result;
 use std::fmt::{Display, Formatter, Result as FmtResult};
 
+use futures::FutureExt;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 
 pub use pg_lambda_macros::Table;
 
 use crate::__proc_macro_util::TableDef;
+use crate::connection::{Connection, SyncTransport, Transport};
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -231,11 +234,37 @@ lazy_static! {
 }
 
 impl Schema {
-    pub fn get() -> &'static Self {
+    pub fn global() -> &'static Self {
         &SCHEMA
+    }
+
+    pub fn migrations(&self) -> Result<Migrations> {
+        todo!()
     }
 
     // fn diff(&self, other: &Self) -> Box<[SchemaOp]> {
     //     todo!()
     // }
+}
+
+pub struct Migrations<'a> {
+    schema: &'a Schema,
+}
+
+impl Migrations<'_> {
+    pub async fn run<T>(self, conn: &mut Connection<T>) -> Result<()>
+    where
+        T: Transport,
+    {
+        todo!()
+    }
+
+    pub fn run_sync<T>(self, conn: &mut Connection<T>) -> Result<()>
+    where
+        T: SyncTransport,
+    {
+        self.run(conn)
+            .now_or_never()
+            .expect("future should resolve immediately")
+    }
 }
