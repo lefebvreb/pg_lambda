@@ -158,24 +158,24 @@ fn table_name_tokens(table: String, schema: Option<String>) -> TokenStream2 {
     }
 }
 
-fn column_tuple_tokens(columns: Vec<String>) -> TokenStream2 {
+fn name_tuple_tokens(columns: Vec<String>) -> TokenStream2 {
     quote! {
-        ColumnTuple(Cow::Borrowed(const {
+        NameTuple(Cow::Borrowed(const {
             &[#(Name::new(#columns),)*]
         }))
     }
 }
 
 fn foreign_key_tokens(columns: Vec<String>, references: References) -> TokenStream2 {
-    let columns = column_tuple_tokens(columns);
+    let columns = name_tuple_tokens(columns);
     let table = table_name_tokens(references.table, references.schema);
-    let ref_columns = column_tuple_tokens(references.ref_columns);
+    let ref_columns = name_tuple_tokens(references.ref_columns);
     let on_delete = match references.on_delete {
         ReferentialAction::NoAction => quote!(ReferentialAction::NoAction),
         ReferentialAction::Restrict => quote!(ReferentialAction::Restrict),
         ReferentialAction::Cascade => quote!(ReferentialAction::Cascade),
         ReferentialAction::SetNull { columns } => {
-            let columns = column_tuple_tokens(columns);
+            let columns = name_tuple_tokens(columns);
             quote! {
                 ReferentialAction::SetNull {
                     columns: #columns,
@@ -183,7 +183,7 @@ fn foreign_key_tokens(columns: Vec<String>, references: References) -> TokenStre
             }
         }
         ReferentialAction::SetDefault { columns } => {
-            let columns = column_tuple_tokens(columns);
+            let columns = name_tuple_tokens(columns);
             quote! {
                 ReferentialAction::SetDefault {
                     columns: #columns,
@@ -406,7 +406,7 @@ pub fn main(input: TokenStream) -> Result<TokenStream2> {
                         constraints.push(foreign_key_tokens(vec![column.clone()], references));
                     }
                     FieldAttribute::Unique { nulls_not_distinct } => {
-                        let columns = column_tuple_tokens(vec![column.clone()]);
+                        let columns = name_tuple_tokens(vec![column.clone()]);
                         constraints.push(quote! {
                             Constraint::Unique {
                                 columns: #columns,
@@ -462,7 +462,7 @@ pub fn main(input: TokenStream) -> Result<TokenStream2> {
                     columns,
                     nulls_not_distinct,
                 } => {
-                    let columns = column_tuple_tokens(columns);
+                    let columns = name_tuple_tokens(columns);
                     constraints.push(quote! {
                         Constraint::Unique {
                             columns: #columns,
@@ -484,7 +484,7 @@ pub fn main(input: TokenStream) -> Result<TokenStream2> {
         }
     });
     if let Some(primary_key) = primary_key {
-        let primary_key = column_tuple_tokens(primary_key);
+        let primary_key = name_tuple_tokens(primary_key);
         constraints.push(quote! {
             Constraint::PrimaryKey {
                 columns: #primary_key,

@@ -8,8 +8,9 @@ use pg_lambda::connection::params::NoParams;
 use pg_lambda::connection::result::Void;
 use pg_lambda::connection::{Config, SyncConnection};
 
-pub fn test_database(f: impl AsyncFnOnce(&Config) -> Result<()> + UnwindSafe) {
+pub fn with_test_database(f: impl AsyncFnOnce(&Config) -> Result<()> + UnwindSafe) {
     // Retrieve config.
+    // todo: use a single var with a connection string inside instead.
     let config = Config {
         user: var("PG_USER").unwrap_or_else(|_| "postgres".to_owned()),
         password: var("PG_PASSWORD").unwrap_or_else(|_| "postgres".to_owned()),

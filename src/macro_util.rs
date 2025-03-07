@@ -9,7 +9,7 @@ pub use crate::connection::params::QueryParams;
 pub use crate::connection::result::{SetOf, Single, Void};
 pub use crate::lambda::PgLambda;
 pub use crate::schema::{
-    Column, ColumnTuple, Constraint, Name, ReferentialAction, Table, TableName, TableSchema,
+    Column, Constraint, Name, NameTuple, ReferentialAction, Table, TableName, TableSchema,
 };
 pub use crate::types::{PgType, ToPgValue};
 

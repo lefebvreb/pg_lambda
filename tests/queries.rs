@@ -10,7 +10,7 @@ mod util;
 
 #[test]
 fn empty_query() {
-    util::test_database(async |config| {
+    util::with_test_database(async |config| {
         let mut conn = SyncConnection::<TcpStream>::connect(&config)?;
         conn.query::<Void, ()>("", NoParams)?;
         Ok(())
@@ -19,7 +19,7 @@ fn empty_query() {
 
 #[test]
 fn echo_query() {
-    util::test_database(async |config| {
+    util::with_test_database(async |config| {
         let mut conn = SyncConnection::<TcpStream>::connect(&config)?;
         let n =
             conn.query::<Single<Integer>, i32>("SELECT $1 * 2", query_params!(Integer(&42i32)))?;

@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::fmt::{Display, Formatter, Result as FmtResult, Write};
+use std::io::Result;
 
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
@@ -36,6 +36,7 @@ impl TableName<'_> {
     fn to_sql(&self, f: &mut String) {
         if let Some(schema) = &self.schema {
             schema.to_sql(f);
+            f.push('.');
         }
         self.name.to_sql(f);
     }
@@ -58,14 +59,14 @@ impl Column<'_> {
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct ColumnTuple<'a>(pub Cow<'a, [Name<'a>]>);
+pub struct NameTuple<'a>(pub Cow<'a, [Name<'a>]>);
 
-impl ColumnTuple<'_> {
+impl NameTuple<'_> {
     fn to_sql(&self, f: &mut String) {
         f.push('(');
         if let Some((last, head)) = self.0.split_last() {
-            for column in head {
-                column.to_sql(f);
+            for name in head {
+                name.to_sql(f);
                 f.push(',');
             }
             last.to_sql(f);
@@ -80,8 +81,8 @@ pub enum ReferentialAction<'a> {
     NoAction,
     Restrict,
     Cascade,
-    SetNull { columns: ColumnTuple<'a> },
-    SetDefault { columns: ColumnTuple<'a> },
+    SetNull { columns: NameTuple<'a> },
+    SetDefault { columns: NameTuple<'a> },
 }
 
 impl ReferentialAction<'_> {
@@ -93,11 +94,11 @@ impl ReferentialAction<'_> {
             Self::SetNull { columns } => {
                 f.push_str("SET NULL ");
                 columns.to_sql(f);
-            },
+            }
             Self::SetDefault { columns } => {
                 f.push_str("SET DEFAULT ");
                 columns.to_sql(f);
-            },
+            }
         }
     }
 }
@@ -109,16 +110,16 @@ pub enum Constraint<'a> {
         expr: Cow<'a, str>,
     },
     Unique {
-        columns: ColumnTuple<'a>,
+        columns: NameTuple<'a>,
         nulls_not_distinct: bool,
     },
     PrimaryKey {
-        columns: ColumnTuple<'a>,
+        columns: NameTuple<'a>,
     },
     ForeignKey {
-        columns: ColumnTuple<'a>,
+        columns: NameTuple<'a>,
         table: TableName<'a>,
-        ref_columns: ColumnTuple<'a>,
+        ref_columns: NameTuple<'a>,
         on_delete: ReferentialAction<'a>,
     },
 }
@@ -129,7 +130,7 @@ impl Constraint<'_> {
             Self::Check { expr } => {
                 f.push_str("CHECK ");
                 f.push_str(expr);
-            },
+            }
             Self::Unique {
                 columns,
                 nulls_not_distinct,
@@ -143,7 +144,7 @@ impl Constraint<'_> {
             Self::PrimaryKey { columns } => {
                 f.push_str("PRIMARY KEY ");
                 columns.to_sql(f);
-            },
+            }
             Self::ForeignKey {
                 columns,
                 table,
@@ -159,7 +160,7 @@ impl Constraint<'_> {
                 references.to_sql(f);
                 f.push_str(" ON DELETE ");
                 on_delete.to_sql(f);
-            },
+            }
         }
     }
 }
@@ -200,7 +201,7 @@ pub enum SchemaOp<'a> {
     },
     DropConstraint {
         table: TableName<'a>,
-        constraint_name: &'a str,
+        constraint: Name<'a>,
     },
 }
 
@@ -214,11 +215,12 @@ impl SchemaOp<'_> {
             Self::CreateTable { table } => {
                 f.push_str("CREATE TABLE ");
                 table.to_sql(f);
-            },
+                f.push_str(" ()");
+            }
             Self::DropTable { table } => {
                 f.push_str("DROP TABLE ");
                 table.to_sql(f);
-            },
+            }
             Self::AddColumn { table, column } => {
                 f.push_str("ALTER TABLE ");
                 table.to_sql(f);
@@ -239,13 +241,12 @@ impl SchemaOp<'_> {
             }
             Self::DropConstraint {
                 table,
-                constraint_name,
+                constraint: constraint_name,
             } => {
                 f.push_str("ALTER TABLE ");
                 table.to_sql(f);
-                f.push_str(" DROP CONSTRAINT \"");
-                f.push_str(constraint_name);
-                f.push('"');
+                f.push_str(" DROP CONSTRAINT ");
+                constraint_name.to_sql(f);
             }
         }
     }
@@ -273,13 +274,18 @@ impl Schema<'static> {
 }
 
 impl<'a> Schema<'a> {
+    pub fn validate(&self) -> Result<()> {
+        todo!();
+        Ok(())
+    }
+
     pub fn migrations(&'a self) -> Migrations<'a> {
         Migrations::new(self)
     }
 
-    pub fn diff(&self, other: &Self) -> Box<[SchemaOp]> {
+    pub fn diff(&self, other: &Self) -> Vec<SchemaOp> {
         let mut res = Vec::new();
-        
-        res.into()
+        todo!();
+        res
     }
 }
