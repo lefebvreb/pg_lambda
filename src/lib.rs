@@ -2,6 +2,7 @@
 
 pub mod connection;
 pub mod lambda;
+pub mod migrations;
 pub mod schema;
 pub mod types;
 

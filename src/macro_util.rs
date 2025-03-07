@@ -14,7 +14,7 @@ pub use crate::schema::{
 pub use crate::types::{PgType, ToPgValue};
 
 pub struct TableDef {
-    pub schema: &'static TableSchema,
+    pub schema: &'static TableSchema<'static>,
 }
 
 inventory::collect!(TableDef);

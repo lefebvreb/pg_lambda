@@ -496,7 +496,7 @@ pub fn main(input: TokenStream) -> Result<TokenStream2> {
         const _: () = {
             use ::#this::__proc_macro_util::*;
             impl Table for #ident {
-                const SCHEMA: TableSchema = TableSchema {
+                const SCHEMA: TableSchema<'static> = TableSchema {
                     name: #name,
                     columns: Cow::Borrowed(const {
                         &[#(#columns,)*]

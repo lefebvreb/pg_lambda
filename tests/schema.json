@@ -1,0 +1,161 @@
+{
+  "tables": [
+    {
+      "name": {
+        "schema": null,
+        "name": "User"
+      },
+      "columns": [
+        {
+          "name": "id",
+          "ty": "INT4"
+        },
+        {
+          "name": "email",
+          "ty": "TEXT"
+        },
+        {
+          "name": "name",
+          "ty": "TEXT"
+        },
+        {
+          "name": "age",
+          "ty": "INT4"
+        }
+      ],
+      "constraints": [
+        {
+          "unique": {
+            "columns": [
+              "email"
+            ],
+            "nullsNotDistinct": false
+          }
+        },
+        {
+          "check": {
+            "expr": "age >= 18"
+          }
+        },
+        {
+          "primaryKey": {
+            "columns": [
+              "id"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": {
+        "schema": "public",
+        "name": "Team"
+      },
+      "columns": [
+        {
+          "name": "id",
+          "ty": "INT4"
+        }
+      ],
+      "constraints": [
+        {
+          "primaryKey": {
+            "columns": [
+              "id"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": {
+        "schema": null,
+        "name": "TeamUser"
+      },
+      "columns": [
+        {
+          "name": "team_id",
+          "ty": "INT4"
+        },
+        {
+          "name": "user_id",
+          "ty": "INT4"
+        }
+      ],
+      "constraints": [
+        {
+          "foreignKey": {
+            "columns": [
+              "team_id"
+            ],
+            "table": {
+              "schema": "public",
+              "name": "Team"
+            },
+            "refColumns": [
+              "id"
+            ],
+            "onDelete": "noAction"
+          }
+        },
+        {
+          "foreignKey": {
+            "columns": [
+              "user_id"
+            ],
+            "table": {
+              "schema": "public",
+              "name": "Team"
+            },
+            "refColumns": [
+              "id"
+            ],
+            "onDelete": "noAction"
+          }
+        },
+        {
+          "primaryKey": {
+            "columns": [
+              "team_id",
+              "user_id"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": {
+        "schema": null,
+        "name": "Permission"
+      },
+      "columns": [
+        {
+          "name": "team_id",
+          "ty": "INT4"
+        },
+        {
+          "name": "user_id",
+          "ty": "INT4"
+        }
+      ],
+      "constraints": [
+        {
+          "foreignKey": {
+            "columns": [
+              "team_id",
+              "user_id"
+            ],
+            "table": {
+              "schema": null,
+              "name": "TeamUser"
+            },
+            "refColumns": [
+              "(team_id, user_id)"
+            ],
+            "onDelete": "cascade"
+          }
+        }
+      ]
+    }
+  ]
+}

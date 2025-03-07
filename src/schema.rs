@@ -1,205 +1,251 @@
 use std::borrow::Cow;
-use std::io::Result;
-use std::fmt::{Display, Formatter, Result as FmtResult};
+use std::fmt::{Display, Formatter, Result as FmtResult, Write};
 
-use futures::FutureExt;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 
 pub use pg_lambda_macros::Table;
 
 use crate::__proc_macro_util::TableDef;
-use crate::connection::{Connection, SyncTransport, Transport};
+use crate::migrations::Migrations;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct Name(pub Cow<'static, str>);
+pub struct Name<'a>(pub Cow<'a, str>);
 
-impl Name {
-    pub const fn new(name: &'static str) -> Self {
+impl<'a> Name<'a> {
+    pub const fn new(name: &'a str) -> Self {
         Self(Cow::Borrowed(name))
     }
-}
 
-impl Display for Name {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        write!(f, "\"{}\"", self.0)
+    fn to_sql(&self, f: &mut String) {
+        f.push('"');
+        f.push_str(&self.0);
+        f.push('"');
     }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TableName {
-    pub schema: Option<Name>,
-    pub name: Name,
+pub struct TableName<'a> {
+    pub schema: Option<Name<'a>>,
+    pub name: Name<'a>,
 }
 
-impl Display for TableName {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+impl TableName<'_> {
+    fn to_sql(&self, f: &mut String) {
         if let Some(schema) = &self.schema {
-            write!(f, "\"{schema}\".")?;
+            schema.to_sql(f);
         }
-        write!(f, "\"{}\"", self.name)
+        self.name.to_sql(f);
     }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Column {
-    pub name: Name,
+pub struct Column<'a> {
+    pub name: Name<'a>,
     pub ty: Cow<'static, str>,
 }
 
-impl Display for Column {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        write!(f, "{} {}", self.name, self.ty)
+impl Column<'_> {
+    fn to_sql(&self, f: &mut String) {
+        self.name.to_sql(f);
+        f.push(' ');
+        f.push_str(&self.ty);
     }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct ColumnTuple(pub Cow<'static, [Name]>);
+pub struct ColumnTuple<'a>(pub Cow<'a, [Name<'a>]>);
 
-impl Display for ColumnTuple {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        write!(f, "(")?;
+impl ColumnTuple<'_> {
+    fn to_sql(&self, f: &mut String) {
+        f.push('(');
         if let Some((last, head)) = self.0.split_last() {
             for column in head {
-                write!(f, "{column},")?;
+                column.to_sql(f);
+                f.push(',');
             }
-            write!(f, "{last}")?;
+            last.to_sql(f);
         }
-        write!(f, ")")
+        f.push(')');
     }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
-pub enum ReferentialAction {
+pub enum ReferentialAction<'a> {
     NoAction,
     Restrict,
     Cascade,
-    SetNull { columns: ColumnTuple },
-    SetDefault { columns: ColumnTuple },
+    SetNull { columns: ColumnTuple<'a> },
+    SetDefault { columns: ColumnTuple<'a> },
 }
 
-impl Display for ReferentialAction {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+impl ReferentialAction<'_> {
+    fn to_sql(&self, f: &mut String) {
         match self {
-            Self::NoAction => write!(f, "NO ACTION"),
-            Self::Restrict => write!(f, "RESTRICT"),
-            Self::Cascade => write!(f, "CASCADE"),
-            Self::SetNull { columns } => write!(f, "SET NULL {columns}"),
-            Self::SetDefault { columns } => write!(f, "SET DEFAULT {columns}"),
+            Self::NoAction => f.push_str("NO ACTION"),
+            Self::Restrict => f.push_str("RESTRICT"),
+            Self::Cascade => f.push_str("CASCADE"),
+            Self::SetNull { columns } => {
+                f.push_str("SET NULL ");
+                columns.to_sql(f);
+            },
+            Self::SetDefault { columns } => {
+                f.push_str("SET DEFAULT ");
+                columns.to_sql(f);
+            },
         }
     }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
-pub enum Constraint {
+pub enum Constraint<'a> {
     Check {
-        expr: Cow<'static, str>,
+        expr: Cow<'a, str>,
     },
     Unique {
-        columns: ColumnTuple,
+        columns: ColumnTuple<'a>,
         nulls_not_distinct: bool,
     },
     PrimaryKey {
-        columns: ColumnTuple,
+        columns: ColumnTuple<'a>,
     },
     ForeignKey {
-        columns: ColumnTuple,
-        table: TableName,
-        ref_columns: ColumnTuple,
-        on_delete: ReferentialAction,
+        columns: ColumnTuple<'a>,
+        table: TableName<'a>,
+        ref_columns: ColumnTuple<'a>,
+        on_delete: ReferentialAction<'a>,
     },
 }
 
-impl Display for Constraint {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+impl Constraint<'_> {
+    fn to_sql(&self, f: &mut String) {
         match self {
-            Self::Check { expr } => write!(f, "CHECK {expr}"),
+            Self::Check { expr } => {
+                f.push_str("CHECK ");
+                f.push_str(expr);
+            },
             Self::Unique {
                 columns,
                 nulls_not_distinct,
             } => {
-                write!(f, "UNIQUE ")?;
+                f.push_str("UNIQUE ");
                 if *nulls_not_distinct {
-                    write!(f, "NULLS NOT DISTINCT ")?;
+                    f.push_str("NULLS NOT DISTINCT ");
                 }
-                write!(f, "{columns}")
+                columns.to_sql(f);
             }
-            Self::PrimaryKey { columns } => write!(f, "PRIMARY KEY {columns}"),
+            Self::PrimaryKey { columns } => {
+                f.push_str("PRIMARY KEY ");
+                columns.to_sql(f);
+            },
             Self::ForeignKey {
                 columns,
                 table,
                 ref_columns: references,
                 on_delete,
                 ..
-            } => write!(
-                f,
-                "FOREIGN KEY {columns} REFERENCES {table} {references} ON DELETE {on_delete}"
-            ),
+            } => {
+                f.push_str("FOREIGN KEY ");
+                columns.to_sql(f);
+                f.push_str("REFERENCES ");
+                table.to_sql(f);
+                f.push(' ');
+                references.to_sql(f);
+                f.push_str(" ON DELETE ");
+                on_delete.to_sql(f);
+            },
         }
     }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableSchema<'a> {
+    pub name: TableName<'a>,
+    pub columns: Cow<'a, [Column<'a>]>,
+    pub constraints: Cow<'a, [Constraint<'a>]>,
+}
+
+/// Struct that corresponds to a table definition. Do not implement this trait manually.
+pub trait Table {
+    const SCHEMA: TableSchema<'static>;
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
-pub enum SchemaOp {
+pub enum SchemaOp<'a> {
     CreateTable {
-        table: TableName,
+        table: TableName<'a>,
     },
     DropTable {
-        table: TableName,
+        table: TableName<'a>,
     },
     AddColumn {
-        table: TableName,
-        column: Column,
+        table: TableName<'a>,
+        column: Column<'a>,
     },
     DropColumn {
-        table: TableName,
-        column: Name,
+        table: TableName<'a>,
+        column: Name<'a>,
     },
     AddConstraint {
-        table: TableName,
-        constraint: Constraint,
+        table: TableName<'a>,
+        constraint: Constraint<'a>,
     },
     DropConstraint {
-        table: TableName,
-        constraint_name: &'static str,
+        table: TableName<'a>,
+        constraint_name: &'a str,
     },
 }
 
-impl SchemaOp {
+impl SchemaOp<'_> {
     pub fn is_destructive(&self) -> bool {
         matches!(self, Self::DropTable { .. } | Self::DropColumn { .. })
     }
-}
 
-impl Display for SchemaOp {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+    fn to_sql(&self, f: &mut String) {
         match self {
-            Self::CreateTable { table } => write!(f, "CREATE TABLE {table};"),
-            Self::DropTable { table } => write!(f, "DROP TABLE {table};"),
+            Self::CreateTable { table } => {
+                f.push_str("CREATE TABLE ");
+                table.to_sql(f);
+            },
+            Self::DropTable { table } => {
+                f.push_str("DROP TABLE ");
+                table.to_sql(f);
+            },
             Self::AddColumn { table, column } => {
-                write!(f, "ALTER TABLE {table} ADD COLUMN {column};")
+                f.push_str("ALTER TABLE ");
+                table.to_sql(f);
+                f.push_str(" CREATE COLUMN ");
+                column.to_sql(f);
             }
             Self::DropColumn { table, column } => {
-                write!(f, "ALTER TABLE {table} DROP COLUMN {column};")
+                f.push_str("ALTER TABLE ");
+                table.to_sql(f);
+                f.push_str(" DROP COLUMN ");
+                column.to_sql(f);
             }
             Self::AddConstraint { table, constraint } => {
-                write!(f, "ALTER TABLE {table} ADD CONSTRAINT {constraint};")
+                f.push_str("ALTER TABLE ");
+                table.to_sql(f);
+                f.push_str(" ADD CONSTRAINT ");
+                constraint.to_sql(f);
             }
             Self::DropConstraint {
                 table,
                 constraint_name,
             } => {
-                write!(
-                    f,
-                    "ALTER TABLE {table} DROP CONSTRAINT \"{constraint_name}\";"
-                )
+                f.push_str("ALTER TABLE ");
+                table.to_sql(f);
+                f.push_str(" DROP CONSTRAINT \"");
+                f.push_str(constraint_name);
+                f.push('"');
             }
         }
     }
@@ -207,25 +253,12 @@ impl Display for SchemaOp {
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TableSchema {
-    pub name: TableName,
-    pub columns: Cow<'static, [Column]>,
-    pub constraints: Cow<'static, [Constraint]>,
-}
-
-/// Struct that corresponds to a table definition. Do not implement this trait manually.
-pub trait Table {
-    const SCHEMA: TableSchema;
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Schema {
-    pub tables: Box<[Cow<'static, TableSchema>]>,
+pub struct Schema<'a> {
+    pub tables: Box<[Cow<'a, TableSchema<'a>>]>,
 }
 
 lazy_static! {
-    static ref SCHEMA: Schema = Schema {
+    static ref SCHEMA: Schema<'static> = Schema {
         tables: inventory::iter::<TableDef>
             .into_iter()
             .map(|def| Cow::Borrowed(def.schema))
@@ -233,40 +266,20 @@ lazy_static! {
     };
 }
 
-impl Schema {
+impl Schema<'static> {
     pub fn global() -> &'static Self {
         &SCHEMA
     }
-
-    pub fn migrations(&self) -> Migrations {
-        Migrations {
-            schema: self,
-        }
-    }
-
-    // fn diff(&self, other: &Self) -> Box<[SchemaOp]> {
-    //     todo!()
-    // }
 }
 
-pub struct Migrations<'a> {
-    schema: &'a Schema,
-}
-
-impl Migrations<'_> {
-    pub async fn run<T>(self, conn: &mut Connection<T>) -> Result<()>
-    where
-        T: Transport,
-    {
-        todo!()
+impl<'a> Schema<'a> {
+    pub fn migrations(&'a self) -> Migrations<'a> {
+        Migrations::new(self)
     }
 
-    pub fn run_sync<T>(self, conn: &mut Connection<T>) -> Result<()>
-    where
-        T: SyncTransport,
-    {
-        self.run(conn)
-            .now_or_never()
-            .expect("future should resolve immediately")
+    pub fn diff(&self, other: &Self) -> Box<[SchemaOp]> {
+        let mut res = Vec::new();
+        
+        res.into()
     }
 }

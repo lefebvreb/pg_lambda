@@ -1,4 +1,4 @@
-use pg_lambda::schema::Table;
+use pg_lambda::schema::{Schema, Table};
 use pg_lambda::types::{Integer, Text};
 
 #[derive(Table)]
@@ -36,4 +36,10 @@ pub struct Permission {
 }
 
 #[test]
-fn schema() {}
+fn schema() {
+    let schema = Schema::global();
+    let json = serde_json::to_string_pretty(&schema).expect("serialization shouldn't fail");
+    // Uncomment the next line to "bless" the current JSON.
+    // std::fs::write("tests/schema.json", json).unwrap();
+    assert_eq!(json, include_str!("schema.json"));
+}
