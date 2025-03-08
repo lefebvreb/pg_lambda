@@ -87,16 +87,16 @@ impl<T: TransportSend> deadpool::managed::Manager for super::ConnectionManager<T
 impl<T: TransportSend + SyncTransport + 'static> r2d2::ManageConnection
     for super::ConnectionManager<T>
 {
-    type Connection = super::SyncConnection<T>;
+    type Connection = super::Connection<T>;
 
     type Error = std::io::Error;
 
     fn connect(&self) -> Result<Self::Connection> {
-        super::SyncConnection::connect(&self.config)
+        super::Connection::connect_sync(&self.config)
     }
 
     fn is_valid(&self, conn: &mut Self::Connection) -> Result<()> {
-        conn.query::<super::result::Void, ()>("", super::params::NoParams)
+        conn.query_sync::<super::result::Void, ()>("", super::params::NoParams)
     }
 
     fn has_broken(&self, conn: &mut Self::Connection) -> bool {

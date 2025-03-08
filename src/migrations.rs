@@ -2,7 +2,7 @@ use std::io::Result;
 
 use futures::FutureExt;
 
-use crate::connection::{Connection, SyncConnection, SyncTransport, Transport};
+use crate::connection::{Connection, SyncTransport, Transport};
 use crate::schema::Schema;
 
 pub struct Migrations<'a> {
@@ -27,10 +27,19 @@ impl<'a> Migrations<'a> {
     where
         T: Transport,
     {
+        // 1. Open transaction
+        // 2. Get current schema from database:
+        //   a. If there is a schema, use it
+        //   b. If there no schema, create the necessary scaffolding
+        // 3. Compute diff with our schema
+        // 4. Execute all diff instructions
+        // 5. Drop all old lambdas
+        // 6. Create all new lambdas
+        // 7. Commit transaction in case of success, else abort
         todo!()
     }
 
-    pub fn run_sync<T>(&mut self, conn: &mut SyncConnection<T>) -> Result<()>
+    pub fn run_sync<T>(&mut self, conn: &mut Connection<T>) -> Result<()>
     where
         T: SyncTransport,
     {

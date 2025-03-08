@@ -210,7 +210,7 @@ impl SchemaOp<'_> {
         matches!(self, Self::DropTable { .. } | Self::DropColumn { .. })
     }
 
-    fn to_sql(&self, f: &mut String) {
+    pub(crate) fn to_sql(&self, f: &mut String) {
         match self {
             Self::CreateTable { table } => {
                 f.push_str("CREATE TABLE ");

@@ -5,7 +5,7 @@ pub use pg_lambda_macros::pg_lambda;
 
 use crate::connection::params::QueryParams;
 use crate::connection::result::FromQueryResult;
-use crate::connection::{Connection, SyncConnection, SyncTransport, Transport};
+use crate::connection::{Connection, SyncTransport, Transport};
 
 pub struct PgLambda<P, R> {
     statement: &'static str,
@@ -35,11 +35,11 @@ where
         conn.query(self.statement, self.params).await
     }
 
-    pub fn execute_sync<'a, U, T>(self, conn: &'a mut SyncConnection<T>) -> Result<U>
+    pub fn execute_sync<'a, U, T>(self, conn: &'a mut Connection<T>) -> Result<U>
     where
         U: FromQueryResult<'a, R, T>,
         T: SyncTransport,
     {
-        conn.query(self.statement, self.params)
+        conn.query_sync(self.statement, self.params)
     }
 }

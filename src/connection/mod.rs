@@ -1,6 +1,5 @@
 use std::convert::identity;
 use std::io::{Error, ErrorKind, Result};
-use std::ops::{Deref, DerefMut};
 
 use buffer::{AnyMessage, BufTransport};
 use futures::FutureExt;
@@ -283,13 +282,6 @@ impl<T: Transport> Connection<T> {
         self.buffer.is_closed()
     }
 
-    pub fn into_sync(self) -> SyncConnection<T>
-    where
-        T: SyncTransport,
-    {
-        SyncConnection { inner: self }
-    }
-
     async fn next_row(&mut self) -> Result<Option<AnyMessage>> {
         if self.ready_for_query {
             return Ok(None);
@@ -327,55 +319,37 @@ impl<T: Transport> Connection<T> {
     {
         self.buffer.parse(msg).map(Row::new).and_then(U::from_row)
     }
-}
 
-#[derive(Debug)]
-pub struct SyncConnection<T> {
-    inner: Connection<T>,
-}
-
-impl<T: SyncTransport> SyncConnection<T> {
-    pub fn connect(config: &Config) -> Result<Self> {
-        Ok(Self {
-            inner: Connection::connect(config)
-                .now_or_never()
-                .expect("future should resolve immediately")?,
-        })
+    pub fn connect_sync(config: &Config) -> Result<Self>
+    where
+        T: SyncTransport,
+    {
+        Self::connect(config)
+            .now_or_never()
+            .expect("future should resolve immediately")
     }
 
-    pub fn query<'a, R, U>(&'a mut self, statement: &str, params: impl QueryParams) -> Result<U>
+    pub fn query_sync<'a, R, U>(
+        &'a mut self,
+        statement: &str,
+        params: impl QueryParams,
+    ) -> Result<U>
     where
+        T: SyncTransport,
         U: FromQueryResult<'a, R, T>,
     {
-        self.inner
-            .query(statement, params)
+        self.query(statement, params)
             .now_or_never()
             .expect("future should resolve immediately")
     }
 
-    pub fn recycle(&mut self) -> Result<()> {
-        self.inner
-            .recycle()
+    pub fn recycle_sync(&mut self) -> Result<()>
+    where
+        T: SyncTransport,
+    {
+        self.recycle()
             .now_or_never()
             .expect("future should resolve immediately")
-    }
-
-    pub fn into_async(self) -> Connection<T> {
-        self.inner
-    }
-}
-
-impl<T> Deref for SyncConnection<T> {
-    type Target = Connection<T>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner
-    }
-}
-
-impl<T> DerefMut for SyncConnection<T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.inner
     }
 }
 
