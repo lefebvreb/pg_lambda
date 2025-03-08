@@ -1,5 +1,6 @@
 use std::convert::identity;
 use std::io::{Error, ErrorKind, Result};
+use std::ops::{Deref, DerefMut};
 
 use buffer::{AnyMessage, BufTransport};
 use futures::FutureExt;
@@ -9,8 +10,8 @@ use messages::{
     ParameterStatus, Parse, ParseComplete, ReadyForQuery, SaslInitialResponse, SaslResponse,
     StartupMessage, Sync,
 };
-use params::QueryParams;
-use result::{FromQueryResult, FromRow, Row};
+use params::{NoParams, QueryParams};
+use result::{FromQueryResult, FromRow, Row, Void};
 use rsasl::config::SASLConfig;
 use rsasl::prelude::{Mechname, SASLClient};
 use util::{from_session_error, unexpected_authentication_message, unexpected_message_prefix};
@@ -88,8 +89,16 @@ pub trait Transport: Sized {
 pub trait SyncTransport: Transport {}
 
 #[derive(Debug)]
+enum TransactionState {
+    None,
+    Some,
+    Failed,
+}
+
+#[derive(Debug)]
 pub struct Connection<T> {
-    buffer: BufTransport<T>,
+    transport: BufTransport<T>,
+    transaction: TransactionState,
     ready_for_query: bool,
 }
 
@@ -97,27 +106,33 @@ impl<T: Transport> Connection<T> {
     /// Receives a single message that is not an error or warning and cannot be automatically handled.
     async fn receive_unhandled(&mut self) -> Result<AnyMessage> {
         loop {
-            let msg = self.buffer.receive_any().await?;
+            let msg = self.transport.receive_any().await?;
             // todo: handle these better.
             let res = match msg.prefix {
                 ErrorResponse::PREFIX => Err(self
-                    .buffer
+                    .transport
                     .parse::<ErrorResponse>(&msg)
                     .map_or_else(identity, Error::from)),
                 NegotiateProtocolVersion::PREFIX => Err(self
-                    .buffer
+                    .transport
                     .parse::<NegotiateProtocolVersion>(&msg)
                     .map_or_else(identity, Error::from)),
                 NoticeResponse::PREFIX | ParameterStatus::PREFIX => Ok(()),
                 _ => return Ok(msg),
             };
-            self.buffer.cut(&msg);
+            self.transport.cut(&msg);
             res?;
         }
     }
 
     /// Performs SASL authentication. Only supports `SCRAM-SHA-256` for now.
-    async fn sasl(&mut self, config: &Config, mechanisms: Vec<Box<[u8]>>) -> Result<()> {
+    async fn sasl_authentication(
+        &mut self,
+        config: &Config,
+        mechanisms: Vec<Box<[u8]>>,
+    ) -> Result<()> {
+        self.transport.clear();
+
         let mut session =
             SASLConfig::with_credentials(None, config.user.clone(), config.password.clone())
                 .and_then(|sasl_config| {
@@ -132,7 +147,7 @@ impl<T: Transport> Connection<T> {
             session.step(None, &mut buf).map_err(from_session_error)?;
         }
 
-        self.buffer
+        self.transport
             .send_all(|mut writer| {
                 writer.add(SaslInitialResponse {
                     mechanism: session.get_mechname(),
@@ -147,14 +162,14 @@ impl<T: Transport> Connection<T> {
             if msg.prefix != Authentication::PREFIX {
                 return Err(unexpected_message_prefix(msg.prefix));
             }
-            match self.buffer.parse(&msg)? {
+            match self.transport.parse(&msg)? {
                 Authentication::Ok => return Ok(()),
                 Authentication::SaslContinue { data } => {
                     let state = session
                         .step(Some(data), &mut buf)
                         .map_err(from_session_error)?;
                     if state.is_running() {
-                        self.buffer
+                        self.transport
                             .send_all(|mut writer| {
                                 writer.add(SaslResponse {
                                     data: buf.as_slice(),
@@ -173,12 +188,13 @@ impl<T: Transport> Connection<T> {
     // Stack after successful connect: ( ∅ )
     pub async fn connect(config: &Config) -> Result<Self> {
         let mut this = Self {
-            buffer: BufTransport::new(T::connect(config).await?),
-            ready_for_query: true,
+            transport: BufTransport::new(T::connect(config).await?),
+            transaction: TransactionState::None,
+            ready_for_query: false,
         };
 
         // Send StartupMessage
-        this.buffer
+        this.transport
             .send_all(|mut writer| {
                 writer.add(StartupMessage {
                     user: &config.user,
@@ -192,33 +208,33 @@ impl<T: Transport> Connection<T> {
         if msg.prefix != Authentication::PREFIX {
             return Err(unexpected_message_prefix(msg.prefix));
         }
-        match this.buffer.parse(&msg)? {
+        match this.transport.parse(&msg)? {
             Authentication::Ok => (),
             Authentication::Sasl { mechanisms } => {
                 let mechanisms = mechanisms
                     .into_iter()
                     .map(|mechanism| mechanism.to_bytes().into())
                     .collect();
-                this.buffer.clear();
-                this.sasl(config, mechanisms).await?;
+                this.sasl_authentication(config, mechanisms).await?;
             }
             _ => return Err(unexpected_authentication_message()),
         }
-        this.buffer.clear();
+        this.transport.clear();
 
         // Wait for BackendKeyData
         let msg = this.receive_unhandled().await?;
         if msg.prefix != BackendKeyData::PREFIX {
             return Err(unexpected_message_prefix(msg.prefix));
         }
-        this.buffer.clear();
+        this.transport.clear();
 
         // Wait for ReadyForQuery
         let msg = this.receive_unhandled().await?;
         if msg.prefix != ReadyForQuery::PREFIX {
             return Err(unexpected_message_prefix(msg.prefix));
         }
-        this.buffer.clear();
+        this.on_ready_for_query(&msg)?;
+        this.transport.clear();
 
         Ok(this)
     }
@@ -234,7 +250,7 @@ impl<T: Transport> Connection<T> {
         self.recycle().await?;
 
         // Send Parse, Bind, Execute and Sync
-        self.buffer
+        self.transport
             .send_all(|mut writer| {
                 writer.add(Parse { statement })?;
                 writer.add(Bind { params })?;
@@ -247,14 +263,14 @@ impl<T: Transport> Connection<T> {
 
         // Waits for ParseComplete
         let msg = self.receive_unhandled().await?;
-        self.buffer.clear();
+        self.transport.clear();
         if msg.prefix != ParseComplete::PREFIX {
             return Err(unexpected_message_prefix(msg.prefix));
         }
 
         // Waits for BindComplete
         let msg = self.receive_unhandled().await?;
-        self.buffer.clear();
+        self.transport.clear();
         if msg.prefix != BindComplete::PREFIX {
             return Err(unexpected_message_prefix(msg.prefix));
         }
@@ -262,10 +278,15 @@ impl<T: Transport> Connection<T> {
         U::from_conn(self).await
     }
 
+    pub async fn transaction(&mut self) -> Result<Transaction<T>> {
+        self.query::<Void, ()>("BEGIN", NoParams).await?;
+        Ok(Transaction { conn: self })
+    }
+
     pub async fn recycle(&mut self) -> Result<()> {
         while !self.ready_for_query {
             let msg = self.receive_unhandled().await?;
-            self.buffer.clear();
+            self.transport.clear();
             match msg.prefix {
                 ReadyForQuery::PREFIX => self.ready_for_query = true,
                 CommandComplete::PREFIX | EmptyQueryResponse::PREFIX | DataRow::PREFIX => (),
@@ -273,13 +294,13 @@ impl<T: Transport> Connection<T> {
             }
         }
 
-        // here: downsize buffer and other cleanup things.
+        // here: downsize buffer and other cleanup tasks.
 
         Ok(())
     }
 
     pub fn is_closed(&self) -> bool {
-        self.buffer.is_closed()
+        self.transport.is_closed()
     }
 
     async fn next_row(&mut self) -> Result<Option<AnyMessage>> {
@@ -293,23 +314,23 @@ impl<T: Transport> Connection<T> {
             DataRow::PREFIX => return Ok(Some(msg)),
             // Query is finished, we should receive a ReadyForQuery immediately after.
             CommandComplete::PREFIX | EmptyQueryResponse::PREFIX => {
-                self.buffer.cut(&msg);
+                self.transport.cut(&msg);
                 let msg = self.receive_unhandled().await?;
                 if msg.prefix != ReadyForQuery::PREFIX {
                     Err(unexpected_message_prefix(msg.prefix))
                 } else {
-                    self.ready_for_query = true;
+                    self.on_ready_for_query(&msg)?;
                     Ok(None)
                 }
             }
             // Previous try to get a ReadyForQuery was most likely cancelled, so here we are again.
             ReadyForQuery::PREFIX => {
-                self.ready_for_query = true;
+                self.on_ready_for_query(&msg)?;
                 Ok(None)
             }
             n => Err(unexpected_message_prefix(n)),
         };
-        self.buffer.cut(&msg);
+        self.transport.cut(&msg);
         res
     }
 
@@ -317,13 +338,25 @@ impl<T: Transport> Connection<T> {
     where
         U: FromRow<'a, R>,
     {
-        self.buffer.parse(msg).map(Row::new).and_then(U::from_row)
+        self.transport
+            .parse(msg)
+            .map(Row::new)
+            .and_then(U::from_row)
     }
 
-    pub fn connect_sync(config: &Config) -> Result<Self>
-    where
-        T: SyncTransport,
-    {
+    fn on_ready_for_query(&mut self, msg: &AnyMessage) -> Result<()> {
+        self.ready_for_query = true;
+        self.transaction = match self.transport.parse(msg)? {
+            ReadyForQuery::Idle => TransactionState::None,
+            ReadyForQuery::Transaction => TransactionState::Some,
+            ReadyForQuery::FailedTransaction => TransactionState::Failed,
+        };
+        Ok(())
+    }
+}
+
+impl<T: SyncTransport> Connection<T> {
+    pub fn connect_sync(config: &Config) -> Result<Self> {
         Self::connect(config)
             .now_or_never()
             .expect("future should resolve immediately")
@@ -335,7 +368,6 @@ impl<T: Transport> Connection<T> {
         params: impl QueryParams,
     ) -> Result<U>
     where
-        T: SyncTransport,
         U: FromQueryResult<'a, R, T>,
     {
         self.query(statement, params)
@@ -343,13 +375,58 @@ impl<T: Transport> Connection<T> {
             .expect("future should resolve immediately")
     }
 
-    pub fn recycle_sync(&mut self) -> Result<()>
-    where
-        T: SyncTransport,
-    {
+    pub fn transaction_sync(&mut self) -> Result<Transaction<T>> {
+        self.transaction()
+            .now_or_never()
+            .expect("future should resolve immediately")
+    }
+
+    pub fn recycle_sync(&mut self) -> Result<()> {
         self.recycle()
             .now_or_never()
             .expect("future should resolve immediately")
+    }
+}
+
+pub struct Transaction<'a, T> {
+    conn: &'a mut Connection<T>,
+}
+
+impl<T: Transport> Transaction<'_, T> {
+    pub async fn commit(self) -> Result<()> {
+        self.conn.query::<Void, ()>("COMMIT", NoParams).await
+    }
+
+    pub async fn rollback(self) -> Result<()> {
+        self.conn.query::<Void, ()>("ROLLBACK", NoParams).await
+    }
+}
+
+impl<T: SyncTransport> Transaction<'_, T> {
+    pub fn commit_sync(self) -> Result<()> {
+        self.commit()
+            .now_or_never()
+            .expect("future should resolve immediately")
+    }
+
+    pub fn rollback_sync(self) -> Result<()> {
+        self.rollback()
+            .now_or_never()
+            .expect("future should resolve immediately")
+    }
+}
+
+impl<T> Deref for Transaction<'_, T> {
+    type Target = Connection<T>;
+
+    fn deref(&self) -> &Self::Target {
+        self.conn
+    }
+}
+
+impl<T> DerefMut for Transaction<'_, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.conn
     }
 }
 

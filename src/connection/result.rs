@@ -197,8 +197,8 @@ impl<R, U, T: Transport> QueryStream<R, U, T> {
     where
         U: FromRow<'a, R>,
     {
-        if !self.inner.buffer.has_partial_data() {
-            self.inner.buffer.clear();
+        if !self.inner.transport.has_partial_data() {
+            self.inner.transport.clear();
         }
 
         match self.inner.next_row().await {

@@ -34,7 +34,7 @@ pub fn with_test_database(f: impl AsyncFnOnce(&Config) -> Result<()> + UnwindSaf
     // Create test database.
     let test_database = format!("testdb_{}", fastrand::u128(..));
     let res = conn.query_sync::<Void, ()>(
-        &format!("CREATE DATABASE \"{test_database}\" TEMPLATE template0"),
+        &format!("CREATE DATABASE \"{test_database}\" TEMPLATE \"template0\""),
         NoParams,
     );
     assert!(
@@ -64,7 +64,7 @@ pub fn with_test_database(f: impl AsyncFnOnce(&Config) -> Result<()> + UnwindSaf
 
     // Drop test database.
     let res = conn.query_sync::<Void, ()>(
-        &format!("DROP DATABASE \"{test_database}\" WITH (FORCE)"),
+        &format!("DROP DATABASE \"{test_database}\" (FORCE)"),
         NoParams,
     );
     assert!(
