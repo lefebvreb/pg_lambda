@@ -53,10 +53,17 @@ fn extract_references(mut pairs: Pairs<Rule>) -> References {
         }
     };
 
+    let ref_columns = pairs
+        .next()
+        .unwrap()
+        .into_inner()
+        .map(|column| column.as_str().to_owned())
+        .collect();
+
     References {
         table,
         schema,
-        ref_columns: vec![pairs.next().unwrap().as_str().to_owned()],
+        ref_columns,
         on_delete: extract_referential_action(pairs.next()),
     }
 }

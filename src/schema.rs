@@ -180,7 +180,7 @@ pub trait Table {
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
-pub enum SchemaOp<'a> {
+pub(crate) enum SchemaOp<'a> {
     CreateTable {
         table: TableName<'a>,
     },
@@ -206,7 +206,7 @@ pub enum SchemaOp<'a> {
 }
 
 impl SchemaOp<'_> {
-    pub fn is_destructive(&self) -> bool {
+    pub(crate) fn is_destructive(&self) -> bool {
         matches!(self, Self::DropTable { .. } | Self::DropColumn { .. })
     }
 
@@ -255,7 +255,7 @@ impl SchemaOp<'_> {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Schema<'a> {
-    pub tables: Box<[Cow<'a, TableSchema<'a>>]>,
+    pub tables: Cow<'a, [Cow<'a, TableSchema<'a>>]>,
 }
 
 lazy_static! {
@@ -275,17 +275,14 @@ impl Schema<'static> {
 
 impl<'a> Schema<'a> {
     pub fn validate(&self) -> Result<()> {
-        todo!();
-        Ok(())
+        todo!()
     }
 
     pub fn migrations(&'a self) -> Migrations<'a> {
         Migrations::new(self)
     }
 
-    pub fn diff(&self, other: &Self) -> Vec<SchemaOp> {
-        let mut res = Vec::new();
-        todo!();
-        res
+    pub(crate) fn diff(&self, other: &Self) -> Vec<SchemaOp> {
+        todo!()
     }
 }

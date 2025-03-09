@@ -40,6 +40,7 @@ fn schema() {
     let schema = Schema::global();
     let json = serde_json::to_string_pretty(&schema).expect("serialization shouldn't fail");
     // Uncomment the next line to "bless" the newly generated JSON.
-    // std::fs::write("tests/schema.json", json).unwrap();
-    assert_eq!(json, include_str!("schema.json"));
+    // std::fs::write("tests/util/schema.json", &json).unwrap();
+    // todo: compare deserialized schema instead of json strings.
+    assert_eq!(json, include_str!("util/schema.json"));
 }
