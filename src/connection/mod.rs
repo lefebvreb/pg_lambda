@@ -14,7 +14,9 @@ use params::{NoParams, QueryParams};
 use result::{FromQueryResult, FromRow, Row, Void};
 use rsasl::config::SASLConfig;
 use rsasl::prelude::{Mechname, SASLClient};
-use util::{from_session_error, unexpected_authentication_message, unexpected_message_prefix};
+use util::{
+    from_session_error, sanitize_name, unexpected_authentication_message, unexpected_message_prefix,
+};
 
 mod buffer;
 mod impls;
@@ -229,12 +231,7 @@ impl<T: Transport> Connection<T> {
         this.transport.clear();
 
         // Wait for ReadyForQuery
-        let msg = this.receive_unhandled().await?;
-        if msg.prefix != ReadyForQuery::PREFIX {
-            return Err(unexpected_message_prefix(msg.prefix));
-        }
-        this.on_ready_for_query(&msg)?;
-        this.transport.clear();
+        this.get_ready().await?;
 
         Ok(this)
     }
@@ -247,7 +244,7 @@ impl<T: Transport> Connection<T> {
     where
         U: FromQueryResult<'a, R, T>,
     {
-        self.recycle().await?;
+        self.get_ready().await?;
 
         // Send Parse, Bind, Execute and Sync
         self.transport
@@ -279,28 +276,49 @@ impl<T: Transport> Connection<T> {
     }
 
     pub async fn transaction(&mut self) -> Result<Transaction<T>> {
+        if self.in_transaction() {
+            return Err(Error::new(
+                ErrorKind::AlreadyExists,
+                "there is already a transaction in progress",
+            ));
+        }
         self.query::<Void, ()>("BEGIN", NoParams).await?;
         Ok(Transaction { conn: self })
     }
 
-    pub async fn recycle(&mut self) -> Result<()> {
+    pub fn is_closed(&self) -> bool {
+        self.transport.is_closed()
+    }
+
+    pub fn in_transaction(&self) -> bool {
+        matches!(
+            self.transaction,
+            TransactionState::Some | TransactionState::Failed
+        )
+    }
+
+    async fn get_ready(&mut self) -> Result<()> {
         while !self.ready_for_query {
             let msg = self.receive_unhandled().await?;
-            self.transport.clear();
             match msg.prefix {
-                ReadyForQuery::PREFIX => self.ready_for_query = true,
+                ReadyForQuery::PREFIX => self.on_ready_for_query(&msg)?,
                 CommandComplete::PREFIX | EmptyQueryResponse::PREFIX | DataRow::PREFIX => (),
                 n => return Err(unexpected_message_prefix(n)),
             }
+            self.transport.clear();
         }
-
-        // here: downsize buffer and other cleanup tasks.
 
         Ok(())
     }
 
-    pub fn is_closed(&self) -> bool {
-        self.transport.is_closed()
+    fn on_ready_for_query(&mut self, msg: &AnyMessage) -> Result<()> {
+        self.ready_for_query = true;
+        self.transaction = match self.transport.parse(msg)? {
+            ReadyForQuery::Idle => TransactionState::None,
+            ReadyForQuery::Transaction => TransactionState::Some,
+            ReadyForQuery::FailedTransaction => TransactionState::Failed,
+        };
+        Ok(())
     }
 
     async fn next_row(&mut self) -> Result<Option<AnyMessage>> {
@@ -344,13 +362,15 @@ impl<T: Transport> Connection<T> {
             .and_then(U::from_row)
     }
 
-    fn on_ready_for_query(&mut self, msg: &AnyMessage) -> Result<()> {
-        self.ready_for_query = true;
-        self.transaction = match self.transport.parse(msg)? {
-            ReadyForQuery::Idle => TransactionState::None,
-            ReadyForQuery::Transaction => TransactionState::Some,
-            ReadyForQuery::FailedTransaction => TransactionState::Failed,
-        };
+    pub async fn recycle(&mut self) -> Result<()> {
+        self.get_ready().await?;
+
+        if self.in_transaction() {
+            self.query::<Void, ()>("ROLLBACK", NoParams).await?;
+        }
+
+        // here: cleanup.
+        
         Ok(())
     }
 }
@@ -380,12 +400,6 @@ impl<T: SyncTransport> Connection<T> {
             .now_or_never()
             .expect("future should resolve immediately")
     }
-
-    pub fn recycle_sync(&mut self) -> Result<()> {
-        self.recycle()
-            .now_or_never()
-            .expect("future should resolve immediately")
-    }
 }
 
 pub struct Transaction<'a, T> {
@@ -400,6 +414,20 @@ impl<T: Transport> Transaction<'_, T> {
     pub async fn rollback(self) -> Result<()> {
         self.conn.query::<Void, ()>("ROLLBACK", NoParams).await
     }
+
+    pub async fn savepoint(&mut self, name: &str) -> Result<()> {
+        sanitize_name(name)?;
+        self.conn
+            .query::<Void, ()>(&format!("SAVEPOINT \"{name}\""), NoParams)
+            .await
+    }
+
+    pub async fn rollback_to(&mut self, name: &str) -> Result<()> {
+        sanitize_name(name)?;
+        self.conn
+            .query::<Void, ()>(&format!("ROLLBACK TO \"{name}\""), NoParams)
+            .await
+    }
 }
 
 impl<T: SyncTransport> Transaction<'_, T> {
@@ -411,6 +439,18 @@ impl<T: SyncTransport> Transaction<'_, T> {
 
     pub fn rollback_sync(self) -> Result<()> {
         self.rollback()
+            .now_or_never()
+            .expect("future should resolve immediately")
+    }
+
+    pub fn savepoint_sync(&mut self, name: &str) -> Result<()> {
+        self.savepoint(name)
+            .now_or_never()
+            .expect("future should resolve immediately")
+    }
+
+    pub fn rollback_to_sync(&mut self, name: &str) -> Result<()> {
+        self.rollback_to(name)
             .now_or_never()
             .expect("future should resolve immediately")
     }

@@ -123,3 +123,13 @@ pub fn unexpected_authentication_message() -> Error {
         "unexpected authentication message at this point",
     )
 }
+
+pub fn sanitize_name(name: &str) -> Result<()> {
+    if name.chars().all(char::is_alphanumeric) {
+        return Ok(());
+    }
+    Err(Error::new(
+        ErrorKind::InvalidData,
+        "only alphanumeric characters are allowed",
+    ))
+}

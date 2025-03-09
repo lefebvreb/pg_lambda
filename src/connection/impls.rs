@@ -76,7 +76,7 @@ impl<T: TransportSend> deadpool::managed::Manager for super::ConnectionManager<T
         conn: &mut Self::Type,
         _: &deadpool::managed::Metrics,
     ) -> deadpool::managed::RecycleResult<Self::Error> {
-        conn.recycle()
+        conn.get_ready()
             .await
             .map_err(deadpool::managed::RecycleError::Backend)
     }
