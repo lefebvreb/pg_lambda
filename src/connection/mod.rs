@@ -370,7 +370,7 @@ impl<T: Transport> Connection<T> {
         }
 
         // here: cleanup.
-        
+
         Ok(())
     }
 }
@@ -397,6 +397,12 @@ impl<T: SyncTransport> Connection<T> {
 
     pub fn transaction_sync(&mut self) -> Result<Transaction<T>> {
         self.transaction()
+            .now_or_never()
+            .expect("future should resolve immediately")
+    }
+
+    pub fn recycle_sync(&mut self) -> Result<()> {
+        self.recycle()
             .now_or_never()
             .expect("future should resolve immediately")
     }

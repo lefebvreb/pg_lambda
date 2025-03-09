@@ -51,6 +51,7 @@ pub fn with_test_database(f: impl AsyncFnOnce(&Config) -> Result<()> + UnwindSaf
         database: test_database.clone(),
         ..config.clone()
     };
+    // todo: add a timeout so it doesn't hang on forever.
     let test_res = catch_unwind(|| block_on(f(&test_config)));
 
     // Open connection to master db.
