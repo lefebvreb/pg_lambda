@@ -1,6 +1,7 @@
 use std::io::{Error, ErrorKind, Result, Write};
-use std::marker::PhantomData;
 use std::str;
+
+use serde::{Deserialize, Serialize};
 
 use crate::util::{read_i32, read_u8, write_i32};
 
@@ -96,13 +97,25 @@ impl<'a> FromPgValue<'a, Text> for String {
     }
 }
 
-pub struct Jsonb<T>(PhantomData<T>);
+pub struct Jsonb;
 
-impl<T> PgType for Jsonb<T> {
+impl PgType for Jsonb {
     const SQL_NAME: &str = "JSONB";
 }
 
+impl<T: Serialize> ToPgValue<Jsonb> for T {
+    fn write(&self, dst: &mut Vec<u8>) -> Result<()> {
+        serde_json::to_writer(dst, self)?;
+        Ok(())
+    }
+}
 
+impl<'a, T: Deserialize<'a> + 'a> FromPgValue<'a, Jsonb> for T {
+    fn read(src: &'a [u8]) -> Result<Self> {
+        let src = <&str as FromPgValue<Text>>::read(src)?;
+        Ok(serde_json::from_str(src)?)
+    }
+}
 
 // pub struct Nullable<T: PgType>(PhantomData<T>);
 

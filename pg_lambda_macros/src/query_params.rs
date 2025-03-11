@@ -55,8 +55,7 @@ pub fn from_expr_type_pairs(macro_util: &TokenStream2, pairs: Vec<(Type, Expr)>)
 
 pub fn main(input: TokenStream) -> Result<TokenStream2> {
     let input = syn::parse::<Input>(input)?;
-    let this = util::crate_ident();
-    let macro_util = quote!(::#this::__proc_macro_util);
+    let macro_util = util::macro_util_path();
     let pairs = input
         .params
         .into_iter()

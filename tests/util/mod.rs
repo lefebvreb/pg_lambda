@@ -1,5 +1,5 @@
 use std::env::var;
-use std::io::{Error, ErrorKind, Result};
+use std::io::Result;
 use std::net::TcpStream;
 use std::panic::{UnwindSafe, catch_unwind, resume_unwind};
 use std::sync::mpsc::channel;
@@ -11,7 +11,7 @@ use pg_lambda::connection::result::Void;
 use pg_lambda::connection::{Config, Connection};
 use tokio::runtime::Runtime;
 
-const TIMEOUT: Duration = Duration::from_secs(5);
+const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub fn with_test_database(
     f: impl AsyncFnOnce(&Config) -> Result<()> + UnwindSafe + Send + 'static,
@@ -74,15 +74,15 @@ pub fn with_test_database(
                 rt.block_on(f(&test_config))
             });
 
-            // Send results through the channel. This might fail if the test already timed out.
+            // Send results through the channel. This might fail if the test
+            // already timed out, in which case just ignore the error.
             tx.send(res).ok();
         });
 
         // Receive the results, with a timeout.
-        match rx.recv_timeout(TIMEOUT) {
-            Ok(res) => res,
-            Err(_) => Ok(Err(Error::new(ErrorKind::TimedOut, "test timed out"))),
-        }
+        let res = rx.recv_timeout(TEST_TIMEOUT);
+        assert!(res.is_ok(), "test timed out");
+        res.unwrap()
     };
 
     // Drop the test database.

@@ -145,22 +145,31 @@ pub struct Single<R>(PhantomData<R>);
 
 impl<'a, R, U: FromRow<'a, R>, T: Transport> FromQueryResult<'a, Single<R>, T> for U {
     async fn from_conn(conn: &'a mut Connection<T>) -> Result<Self> {
-        let msg = conn
-            .next_row()
+        Option::<U>::from_conn(conn)
             .await?
-            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "unexpected empty query result"))?;
-        if conn.next_row().await?.is_some() {
-            return Err(Error::new(
-                ErrorKind::InvalidData,
-                "unexpected second row in query result",
-            ));
-        }
-        conn.parse_row(&msg)
+            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "unexpected empty query result"))
     }
 }
 
 /// Marker for queries that are supposed to return a set of rows.
 pub struct SetOf<R>(PhantomData<R>);
+
+impl<'a, R, U: FromRow<'a, R>, T: Transport> FromQueryResult<'a, SetOf<R>, T> for Option<U> {
+    async fn from_conn(conn: &'a mut Connection<T>) -> Result<Self> {
+        match conn.next_row().await? {
+            Some(msg) => {
+                if conn.next_row().await?.is_some() {
+                    return Err(Error::new(
+                        ErrorKind::InvalidData,
+                        "unexpected second row in query result",
+                    ));
+                }
+                conn.parse_row(&msg).map(Some)
+            }
+            None => Ok(None),
+        }
+    }
+}
 
 impl<'a, R, U: FromRow<'a, R>, T: Transport> FromQueryResult<'a, SetOf<R>, T> for Vec<U> {
     async fn from_conn(conn: &'a mut Connection<T>) -> Result<Self> {

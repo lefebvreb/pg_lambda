@@ -95,8 +95,7 @@ impl Parse for Input {
 
 pub fn main(input: TokenStream) -> Result<TokenStream2> {
     let input = syn::parse::<Input>(input)?;
-    let this = util::crate_ident();
-    let macro_util = quote!(::#this::__proc_macro_util);
+    let macro_util = util::macro_util_path();
 
     let mut tokens = Vec::new();
 

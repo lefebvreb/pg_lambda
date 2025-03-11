@@ -21,7 +21,7 @@ fn transaction() {
             NoParams,
         )?;
 
-        let res = conn2.query_sync::<SetOf<(Text, Integer)>, Vec<(String, i32)>>(
+        let res = conn2.query_sync::<SetOf<(Text, Integer)>, Vec<(&str, i32)>>(
             "SELECT name, age FROM persons",
             NoParams,
         )?;
@@ -29,11 +29,11 @@ fn transaction() {
 
         trans.commit_sync()?;
 
-        let res = conn2.query_sync::<SetOf<(Text, Integer)>, Vec<(String, i32)>>(
+        let res = conn2.query_sync::<SetOf<(Text, Integer)>, Vec<(&str, i32)>>(
             "SELECT name, age FROM persons",
             NoParams,
         )?;
-        assert_eq!(res, vec![("john".to_string(), 42)]);
+        assert_eq!(res, vec![("john", 42)]);
 
         Ok(())
     });

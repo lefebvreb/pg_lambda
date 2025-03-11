@@ -18,3 +18,5 @@ After `0.1.0`:
 * Support custom migrations.
 * Improve connection life-cyle, with recycling and transactions handling
 * Support indexes in schema.
+* Have default types for results.
+* Improve error reporting.

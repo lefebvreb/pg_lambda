@@ -375,7 +375,7 @@ impl FieldAttribute {
 
 pub fn main(input: TokenStream) -> Result<TokenStream2> {
     let item = syn::parse::<ItemStruct>(input)?;
-    let this = util::crate_ident();
+    let macro_util = util::macro_util_path();
     let ident = &item.ident;
 
     // Schema data.
@@ -501,7 +501,7 @@ pub fn main(input: TokenStream) -> Result<TokenStream2> {
 
     Ok(quote! {
         const _: () = {
-            use ::#this::__proc_macro_util::*;
+            use #macro_util::*;
             impl Table for #ident {
                 const SCHEMA: TableSchema<'static> = TableSchema {
                     name: #name,

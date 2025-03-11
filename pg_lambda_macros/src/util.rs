@@ -1,15 +1,22 @@
 use proc_macro::TokenStream;
 use proc_macro_crate::FoundCrate;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::format_ident;
-use syn::{Ident, Result};
+use quote::{format_ident, quote};
+use syn::Result;
 
 const MAIN_CRATE_NAME: &str = "pg_lambda";
 
-pub fn crate_ident() -> Ident {
+pub fn macro_util_path() -> TokenStream2 {
     match proc_macro_crate::crate_name(MAIN_CRATE_NAME) {
-        Ok(FoundCrate::Name(name)) => format_ident!("{name}"),
-        _ => format_ident!("{MAIN_CRATE_NAME}"),
+        Ok(FoundCrate::Name(name)) => {
+            let ident = format_ident!("{name}");
+            quote!(::#ident::__proc_macro_util)
+        }
+        Ok(FoundCrate::Itself) => quote!(crate::__proc_macro_util),
+        _ => {
+            let ident = format_ident!("{MAIN_CRATE_NAME}");
+            quote!(::#ident::__proc_macro_util)
+        }
     }
 }
 

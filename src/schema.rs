@@ -263,7 +263,7 @@ impl SchemaOp<'_> {
         }
     }
 
-    pub(crate) fn sort_key(&self) -> i32 {
+    fn sort_key(&self) -> i32 {
         match self {
             Self::DropConstraint { .. } => 1,
             Self::DropColumn { .. } => 2,
@@ -312,23 +312,34 @@ impl<'a> Schema<'a> {
         &self.tables
     }
 
-    pub fn validate(&self) -> Result<()> {
-        // forbid schema "__pg_lambda".
-        // Sanitize identifiers.
-        //
-        todo!()
-    }
-
     pub fn migrations(&'a self) -> Migrations<'a> {
         Migrations::new(self)
     }
 
-    pub(crate) fn diff(&self, other: &Self) -> Vec<SchemaOp> {
+    pub fn validate(&self) -> Result<()> {
+        // forbid schema "__pg_lambda".
+        // Sanitize identifiers.
+        // Check cross-table references validity.
+        todo!()
+    }
+
+    /// Compute the diff between `self` and `old`.
+    ///
+    /// Returns a series of instructions that must be executed in the
+    /// specific order they are given to migrate the database from
+    /// `old` to `self`.
+    pub(crate) fn diff(&self, old: &Self) -> Vec<SchemaOp> {
         let mut diff = Vec::new();
 
         // todo: compute diff here
 
         diff.sort_unstable_by_key(SchemaOp::sort_key);
         diff
+    }
+}
+
+impl Default for Schema<'_> {
+    fn default() -> Self {
+        Self::new(&[])
     }
 }
