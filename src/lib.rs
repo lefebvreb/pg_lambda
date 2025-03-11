@@ -5,6 +5,7 @@ pub mod lambda;
 pub mod migrations;
 pub mod schema;
 pub mod types;
+mod util;
 
 pub mod prelude {
     pub use crate::lambda::pg_lambda;

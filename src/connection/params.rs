@@ -2,7 +2,7 @@ use std::io::Result;
 
 pub use pg_lambda_macros::query_params;
 
-use super::util::write_i16;
+use crate::util::write_i16;
 
 pub trait QueryParams {
     fn write(self, dst: &mut Vec<u8>) -> Result<()>;

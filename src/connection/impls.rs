@@ -48,7 +48,11 @@ impl<T: TransportSend + 'static> bb8::ManageConnection for super::ConnectionMana
 
     // See: https://github.com/rust-lang/rust/issues/100013
     // async fn is_valid(&self, conn: &mut Self::Connection) -> Result<()> {
-    //     conn.query::<super::result::Void, ()>("", super::params::NoParams).await
+    //     conn.query::<super::result::Single<crate::types::Int4>, i32>(
+    //         "SELECT 1",
+    //         super::params::NoParams,
+    //     ).await?;
+    //     Ok(())
     // }
 
     async fn is_valid(&self, _: &mut Self::Connection) -> Result<()> {
@@ -71,14 +75,23 @@ impl<T: TransportSend> deadpool::managed::Manager for super::ConnectionManager<T
         super::Connection::connect(&self.config).await
     }
 
+    // See: https://github.com/rust-lang/rust/issues/100013
+    // async fn recycle(
+    //     &self,
+    //     conn: &mut Self::Type,
+    //     _: &deadpool::managed::Metrics,
+    // ) -> deadpool::managed::RecycleResult<Self::Error> {
+    //     conn.recycle()
+    //         .await
+    //         .map_err(deadpool::managed::RecycleError::Backend)
+    // }
+
     async fn recycle(
         &self,
-        conn: &mut Self::Type,
+        _: &mut Self::Type,
         _: &deadpool::managed::Metrics,
     ) -> deadpool::managed::RecycleResult<Self::Error> {
-        conn.get_ready()
-            .await
-            .map_err(deadpool::managed::RecycleError::Backend)
+        Ok(())
     }
 }
 
@@ -96,7 +109,11 @@ impl<T: TransportSend + SyncTransport + 'static> r2d2::ManageConnection
     }
 
     fn is_valid(&self, conn: &mut Self::Connection) -> Result<()> {
-        conn.query_sync::<super::result::Void, ()>("", super::params::NoParams)
+        conn.query_sync::<super::result::Single<crate::types::Int4>, i32>(
+            "SELECT 1",
+            super::params::NoParams,
+        )?;
+        Ok(())
     }
 
     fn has_broken(&self, conn: &mut Self::Connection) -> bool {

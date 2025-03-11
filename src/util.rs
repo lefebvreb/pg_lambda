@@ -3,8 +3,7 @@ use std::io::{Error, ErrorKind, Read, Result};
 use std::slice;
 
 use rsasl::prelude::SessionError;
-
-use super::messages::{ErrorResponse, NegotiateProtocolVersion};
+use unicode_xid::UnicodeXID;
 
 pub fn read_u8(src: &mut &[u8]) -> Result<u8> {
     let mut byte = 0;
@@ -73,32 +72,6 @@ pub fn write_slice(val: &[u8], dst: &mut Vec<u8>) {
     dst.extend(val);
 }
 
-impl From<ErrorResponse<'_>> for Error {
-    fn from(msg: ErrorResponse) -> Self {
-        Error::new(
-            ErrorKind::InvalidData,
-            format!("postgresql error: {:?}", msg.fields),
-        )
-    }
-}
-
-impl From<NegotiateProtocolVersion<'_>> for Error {
-    fn from(msg: NegotiateProtocolVersion) -> Self {
-        Error::new(
-            ErrorKind::InvalidData,
-            format!(
-                "unsupported protocol version, newest minor protocol supported version is {}, the following options are unsupported: {}",
-                msg.min_supported,
-                msg.unsupported
-                    .into_iter()
-                    .flat_map(CStr::to_str)
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            ),
-        )
-    }
-}
-
 pub fn closed_transport() -> Error {
     Error::new(ErrorKind::UnexpectedEof, "transport was closed")
 }
@@ -124,12 +97,40 @@ pub fn unexpected_authentication_message() -> Error {
     )
 }
 
-pub fn sanitize_name(name: &str) -> Result<()> {
-    if name.chars().all(char::is_alphanumeric) {
-        return Ok(());
+pub fn sanitize_ident(name: &str) -> Result<()> {
+    let mut chars = name.chars();
+
+    match chars.next() {
+        Some('_') => match chars.next() {
+            Some(c) if c.is_xid_continue() => (),
+            _ => {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "invalid identifier: \"{name}\": identifiers starting with an underscore '_' must be followed by at least one XID_CONTINUE character",
+                    ),
+                ));
+            }
+        },
+        Some(c) if c.is_xid_start() => (),
+        _ => {
+            return Err(Error::new(
+                ErrorKind::UnexpectedEof,
+                format!(
+                    "invalid identifier: \"{name}\": identifiers must start with either an underscore '_' or a XID_START character",
+                ),
+            ));
+        }
+    };
+
+    if !chars.all(char::is_xid_continue) {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "invalid identifier \"{name}\": tail characters must all be XID_CONTINUE characters",
+            ),
+        ));
     }
-    Err(Error::new(
-        ErrorKind::InvalidData,
-        "only alphanumeric characters are allowed",
-    ))
+
+    Ok(())
 }

@@ -3,7 +3,7 @@ use std::ffi::CStr;
 use std::io::{Error, ErrorKind, Result};
 
 use super::params::QueryParams;
-use super::util::{
+use crate::util::{
     read_cstr, read_i16, read_i32, read_u8, write_cstr, write_i16, write_i32, write_slice,
     write_str, write_u8,
 };

@@ -1,4 +1,5 @@
 use std::convert::identity;
+use std::ffi::CStr;
 use std::io::{Error, ErrorKind, Result};
 use std::ops::{Deref, DerefMut};
 
@@ -14,8 +15,10 @@ use params::{NoParams, QueryParams};
 use result::{FromQueryResult, FromRow, Row, Void};
 use rsasl::config::SASLConfig;
 use rsasl::prelude::{Mechname, SASLClient};
-use util::{
-    from_session_error, sanitize_name, unexpected_authentication_message, unexpected_message_prefix,
+
+use crate::util::{
+    from_session_error, sanitize_ident, unexpected_authentication_message,
+    unexpected_message_prefix,
 };
 
 mod buffer;
@@ -23,7 +26,6 @@ mod impls;
 mod messages;
 pub mod params;
 pub mod result;
-mod util;
 
 // todo: add a config for max connection buffer size, and implement a mechanism to shrink buffers when it gets too large.
 #[derive(Clone, Debug)]
@@ -422,14 +424,14 @@ impl<T: Transport> Transaction<'_, T> {
     }
 
     pub async fn savepoint(&mut self, name: &str) -> Result<()> {
-        sanitize_name(name)?;
+        sanitize_ident(name)?;
         self.conn
             .query::<Void, ()>(&format!("SAVEPOINT \"{name}\""), NoParams)
             .await
     }
 
     pub async fn rollback_to(&mut self, name: &str) -> Result<()> {
-        sanitize_name(name)?;
+        sanitize_ident(name)?;
         self.conn
             .query::<Void, ()>(&format!("ROLLBACK TO \"{name}\""), NoParams)
             .await
@@ -473,6 +475,32 @@ impl<T> Deref for Transaction<'_, T> {
 impl<T> DerefMut for Transaction<'_, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.conn
+    }
+}
+
+impl From<ErrorResponse<'_>> for Error {
+    fn from(msg: ErrorResponse) -> Self {
+        Error::new(
+            ErrorKind::InvalidData,
+            format!("postgresql error: {:?}", msg.fields),
+        )
+    }
+}
+
+impl From<NegotiateProtocolVersion<'_>> for Error {
+    fn from(msg: NegotiateProtocolVersion) -> Self {
+        Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "unsupported protocol version, newest minor protocol supported version is {}, the following options are unsupported: {}",
+                msg.min_supported,
+                msg.unsupported
+                    .into_iter()
+                    .flat_map(CStr::to_str)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ),
+        )
     }
 }
 

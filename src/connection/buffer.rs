@@ -3,7 +3,7 @@ use std::ops::Range;
 
 use super::Transport;
 use super::messages::{BackendMessage, FrontendMessage};
-use super::util::closed_transport;
+use crate::util::closed_transport;
 
 #[derive(Debug)]
 pub struct MessageWriter<'a> {

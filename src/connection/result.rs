@@ -9,8 +9,8 @@ use futures::{FutureExt, Stream};
 use crate::types::{FromPgValue, PgType};
 
 use super::messages::DataRow;
-use super::util::{read_i32, read_slice};
 use super::{Connection, SyncTransport, Transport};
+use crate::util::{read_i32, read_slice};
 
 pub struct Row<'a> {
     inner: DataRow<'a>,

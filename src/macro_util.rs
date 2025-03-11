@@ -41,7 +41,7 @@ where
 }
 
 pub fn write_i16(count: i16, dst: &mut Vec<u8>) {
-    dst.extend(&count.to_be_bytes());
+    crate::util::write_i16(count, dst);
 }
 
 pub fn write_value<T: PgType, U: ToPgValue<T>>(
@@ -49,10 +49,10 @@ pub fn write_value<T: PgType, U: ToPgValue<T>>(
     dst: &mut Vec<u8>,
 ) -> std::io::Result<()> {
     if value.is_null() {
-        dst.extend(&(-1i32).to_be_bytes());
+        crate::util::write_i32(-1, dst);
     } else {
         let start = dst.len();
-        dst.extend([0; 4]);
+        crate::util::write_i32(0, dst);
         U::write(value, dst)?;
         let size = ((dst.len() - start - 4) as i32).to_be_bytes();
         dst[start..start + 4].copy_from_slice(&size);

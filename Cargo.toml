@@ -30,6 +30,7 @@ serde_json = { version = "1.0.139", default-features = false, features = ["std"]
 thiserror = { version = "2.0.11", default-features = false, features = ["std"] }
 tokio = { version = "1.43.0", default-features = false, optional = true, features = ["io-util", "net"] }
 trait-variant = { version = "0.1.2", default-features = false }
+unicode-xid = { version = "0.2.6", default-features = false }
 
 [dependencies.pg_lambda_macros]
 path = "pg_lambda_macros"

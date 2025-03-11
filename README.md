@@ -16,3 +16,5 @@ After `0.1.0`:
 * Support more authentication methods.
 * Add timeout on transport read/writes.
 * Support custom migrations.
+* Improve connection life-cyle, with recycling and transactions handling
+* Support indexes in schema.

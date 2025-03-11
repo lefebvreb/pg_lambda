@@ -1,5 +1,7 @@
-use std::io::{Error, ErrorKind, Read, Result, Write};
+use std::io::{Error, ErrorKind, Result, Write};
 use std::str;
+
+use crate::util::{read_i32, read_u8, write_i32};
 
 pub trait PgType: 'static {
     const SQL_NAME: &str;
@@ -21,6 +23,26 @@ pub trait FromPgValue<'a, T: PgType>: Sized + 'a {
     fn read(src: &'a [u8]) -> Result<Self>;
 }
 
+pub struct Boolean;
+
+impl PgType for Boolean {
+    const SQL_NAME: &str = "BOOLEAN";
+}
+
+impl ToPgValue<Boolean> for bool {
+    fn write(&self, dst: &mut Vec<u8>) -> Result<()> {
+        dst.push(*self as u8);
+        Ok(())
+    }
+}
+
+impl FromPgValue<'_, Boolean> for bool {
+    fn read(mut src: &'_ [u8]) -> Result<Self> {
+        let byte = read_u8(&mut src)?;
+        Ok(byte != 0)
+    }
+}
+
 pub struct Int4;
 
 impl PgType for Int4 {
@@ -33,15 +55,14 @@ pub type Int = Int4;
 
 impl ToPgValue<Int4> for i32 {
     fn write(&self, dst: &mut Vec<u8>) -> Result<()> {
-        dst.write_all(&self.to_be_bytes())
+        write_i32(*self, dst);
+        Ok(())
     }
 }
 
 impl FromPgValue<'_, Int4> for i32 {
     fn read(mut src: &'_ [u8]) -> Result<Self> {
-        let mut buf = [0; 4];
-        src.read_exact(&mut buf)?;
-        Ok(i32::from_be_bytes(buf))
+        read_i32(&mut src)
     }
 }
 
