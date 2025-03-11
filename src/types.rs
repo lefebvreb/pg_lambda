@@ -1,9 +1,10 @@
 use std::io::{Error, ErrorKind, Result, Write};
+use std::marker::PhantomData;
 use std::str;
 
 use crate::util::{read_i32, read_u8, write_i32};
 
-pub trait PgType: 'static {
+pub trait PgType {
     const SQL_NAME: &str;
 }
 
@@ -94,6 +95,14 @@ impl<'a> FromPgValue<'a, Text> for String {
         <&str as FromPgValue<Text>>::read(src).map(ToOwned::to_owned)
     }
 }
+
+pub struct Jsonb<T>(PhantomData<T>);
+
+impl<T> PgType for Jsonb<T> {
+    const SQL_NAME: &str = "JSONB";
+}
+
+
 
 // pub struct Nullable<T: PgType>(PhantomData<T>);
 

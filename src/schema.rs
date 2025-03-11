@@ -324,6 +324,11 @@ impl<'a> Schema<'a> {
     }
 
     pub(crate) fn diff(&self, other: &Self) -> Vec<SchemaOp> {
-        todo!()
+        let mut diff = Vec::new();
+
+        // todo: compute diff here
+
+        diff.sort_unstable_by_key(SchemaOp::sort_key);
+        diff
     }
 }

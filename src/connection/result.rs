@@ -141,7 +141,7 @@ impl<T: Transport> FromQueryResult<'_, Void, T> for () {
 }
 
 /// Marker for queries that are supposed to return a single row.
-pub struct Single<R: 'static>(PhantomData<R>);
+pub struct Single<R>(PhantomData<R>);
 
 impl<'a, R, U: FromRow<'a, R>, T: Transport> FromQueryResult<'a, Single<R>, T> for U {
     async fn from_conn(conn: &'a mut Connection<T>) -> Result<Self> {
@@ -160,7 +160,7 @@ impl<'a, R, U: FromRow<'a, R>, T: Transport> FromQueryResult<'a, Single<R>, T> f
 }
 
 /// Marker for queries that are supposed to return a set of rows.
-pub struct SetOf<R: 'static>(PhantomData<R>);
+pub struct SetOf<R>(PhantomData<R>);
 
 impl<'a, R, U: FromRow<'a, R>, T: Transport> FromQueryResult<'a, SetOf<R>, T> for Vec<U> {
     async fn from_conn(conn: &'a mut Connection<T>) -> Result<Self> {
