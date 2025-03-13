@@ -74,7 +74,7 @@ impl PgType for Text {
     const SQL_NAME: &str = "TEXT";
 }
 
-impl ToPgValue<Text> for &str {
+impl ToPgValue<Text> for str {
     fn write(&self, dst: &mut Vec<u8>) -> Result<()> {
         dst.write_all(self.as_bytes())
     }

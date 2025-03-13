@@ -18,10 +18,10 @@ impl<'a> Name<'a> {
         Self(Cow::Borrowed(name))
     }
 
-    fn to_sql(&self, f: &mut String) {
-        f.push('"');
-        f.push_str(&self.0);
-        f.push('"');
+    pub(crate) fn to_sql(&self, s: &mut String) {
+        s.push('"');
+        s.push_str(&self.0);
+        s.push('"');
     }
 }
 
@@ -33,12 +33,12 @@ pub struct TableName<'a> {
 }
 
 impl TableName<'_> {
-    fn to_sql(&self, f: &mut String) {
+    fn to_sql(&self, s: &mut String) {
         if let Some(schema) = &self.schema {
-            schema.to_sql(f);
-            f.push('.');
+            schema.to_sql(s);
+            s.push('.');
         }
-        self.name.to_sql(f);
+        self.name.to_sql(s);
     }
 }
 
@@ -50,10 +50,10 @@ pub struct Column<'a> {
 }
 
 impl Column<'_> {
-    fn to_sql(&self, f: &mut String) {
-        self.name.to_sql(f);
-        f.push(' ');
-        f.push_str(&self.ty);
+    fn to_sql(&self, s: &mut String) {
+        self.name.to_sql(s);
+        s.push(' ');
+        s.push_str(&self.ty);
     }
 }
 
@@ -62,16 +62,16 @@ impl Column<'_> {
 pub struct NameTuple<'a>(pub Cow<'a, [Name<'a>]>);
 
 impl NameTuple<'_> {
-    fn to_sql(&self, f: &mut String) {
-        f.push('(');
+    fn to_sql(&self, s: &mut String) {
+        s.push('(');
         if let Some((last, head)) = self.0.split_last() {
             for name in head {
-                name.to_sql(f);
-                f.push(',');
+                name.to_sql(s);
+                s.push(',');
             }
-            last.to_sql(f);
+            last.to_sql(s);
         }
-        f.push(')');
+        s.push(')');
     }
 }
 
@@ -86,18 +86,18 @@ pub enum ReferentialAction<'a> {
 }
 
 impl ReferentialAction<'_> {
-    fn to_sql(&self, f: &mut String) {
+    fn to_sql(&self, s: &mut String) {
         match self {
-            Self::NoAction => f.push_str("NO ACTION"),
-            Self::Restrict => f.push_str("RESTRICT"),
-            Self::Cascade => f.push_str("CASCADE"),
+            Self::NoAction => s.push_str("NO ACTION"),
+            Self::Restrict => s.push_str("RESTRICT"),
+            Self::Cascade => s.push_str("CASCADE"),
             Self::SetNull { columns } => {
-                f.push_str("SET NULL ");
-                columns.to_sql(f);
+                s.push_str("SET NULL ");
+                columns.to_sql(s);
             }
             Self::SetDefault { columns } => {
-                f.push_str("SET DEFAULT ");
-                columns.to_sql(f);
+                s.push_str("SET DEFAULT ");
+                columns.to_sql(s);
             }
         }
     }
@@ -125,25 +125,25 @@ pub enum Constraint<'a> {
 }
 
 impl Constraint<'_> {
-    fn to_sql(&self, f: &mut String) {
+    fn to_sql(&self, s: &mut String) {
         match self {
             Self::Check { expr } => {
-                f.push_str("CHECK ");
-                f.push_str(expr);
+                s.push_str("CHECK ");
+                s.push_str(expr);
             }
             Self::Unique {
                 columns,
                 nulls_not_distinct,
             } => {
-                f.push_str("UNIQUE ");
+                s.push_str("UNIQUE ");
                 if *nulls_not_distinct {
-                    f.push_str("NULLS NOT DISTINCT ");
+                    s.push_str("NULLS NOT DISTINCT ");
                 }
-                columns.to_sql(f);
+                columns.to_sql(s);
             }
             Self::PrimaryKey { columns } => {
-                f.push_str("PRIMARY KEY ");
-                columns.to_sql(f);
+                s.push_str("PRIMARY KEY ");
+                columns.to_sql(s);
             }
             Self::ForeignKey {
                 columns,
@@ -152,14 +152,14 @@ impl Constraint<'_> {
                 on_delete,
                 ..
             } => {
-                f.push_str("FOREIGN KEY ");
-                columns.to_sql(f);
-                f.push_str("REFERENCES ");
-                table.to_sql(f);
-                f.push(' ');
-                references.to_sql(f);
-                f.push_str(" ON DELETE ");
-                on_delete.to_sql(f);
+                s.push_str("FOREIGN KEY ");
+                columns.to_sql(s);
+                s.push_str("REFERENCES ");
+                table.to_sql(s);
+                s.push(' ');
+                references.to_sql(s);
+                s.push_str(" ON DELETE ");
+                on_delete.to_sql(s);
             }
         }
     }
@@ -214,51 +214,51 @@ impl SchemaOp<'_> {
         matches!(self, Self::DropTable { .. } | Self::DropColumn { .. })
     }
 
-    pub(crate) fn to_sql(&self, f: &mut String) {
+    pub(crate) fn to_sql(&self, s: &mut String) {
         match self {
             Self::DropConstraint {
                 table,
                 constraint: constraint_name,
             } => {
-                f.push_str("ALTER TABLE ");
-                table.to_sql(f);
-                f.push_str(" DROP CONSTRAINT ");
-                constraint_name.to_sql(f);
+                s.push_str("ALTER TABLE ");
+                table.to_sql(s);
+                s.push_str(" DROP CONSTRAINT ");
+                constraint_name.to_sql(s);
             }
             Self::DropColumn { table, column } => {
-                f.push_str("ALTER TABLE ");
-                table.to_sql(f);
-                f.push_str(" DROP COLUMN ");
-                column.to_sql(f);
+                s.push_str("ALTER TABLE ");
+                table.to_sql(s);
+                s.push_str(" DROP COLUMN ");
+                column.to_sql(s);
             }
             Self::DropTable { table } => {
-                f.push_str("DROP TABLE ");
-                table.to_sql(f);
+                s.push_str("DROP TABLE ");
+                table.to_sql(s);
             }
             Self::DropSchema { schema } => {
-                f.push_str("DROP SCHEMA ");
-                f.push_str(schema);
+                s.push_str("DROP SCHEMA ");
+                s.push_str(schema);
             }
             Self::CreateSchema { schema } => {
-                f.push_str("CREATE SCHEMA ");
-                f.push_str(schema);
+                s.push_str("CREATE SCHEMA ");
+                s.push_str(schema);
             }
             Self::CreateTable { table } => {
-                f.push_str("CREATE TABLE ");
-                table.to_sql(f);
-                f.push_str(" ()");
+                s.push_str("CREATE TABLE ");
+                table.to_sql(s);
+                s.push_str(" ()");
             }
             Self::AddColumn { table, column } => {
-                f.push_str("ALTER TABLE ");
-                table.to_sql(f);
-                f.push_str(" CREATE COLUMN ");
-                column.to_sql(f);
+                s.push_str("ALTER TABLE ");
+                table.to_sql(s);
+                s.push_str(" CREATE COLUMN ");
+                column.to_sql(s);
             }
             Self::AddConstraint { table, constraint } => {
-                f.push_str("ALTER TABLE ");
-                table.to_sql(f);
-                f.push_str(" ADD CONSTRAINT ");
-                constraint.to_sql(f);
+                s.push_str("ALTER TABLE ");
+                table.to_sql(s);
+                s.push_str(" ADD CONSTRAINT ");
+                constraint.to_sql(s);
             }
         }
     }
