@@ -10,9 +10,10 @@ use crate::connection::result::{SetOf, Single, Void};
 use crate::connection::{Connection, SyncTransport, Transport};
 use crate::schema::{Name, Schema, SchemaOp};
 use crate::types::{Boolean, Jsonb, Text};
+use crate::util::sanitize_ident;
 
 mod queries {
-    pub const SCHEMA_EXISTS: &str = r#"
+    pub const SELECT_EXISTS_SCHEMA: &str = r#"
         SELECT EXISTS (
             SELECT FROM "information_schema"."schemata" 
             WHERE "schema_name" = '__pg_lambda'
@@ -52,9 +53,9 @@ mod queries {
         RETURNING "name"
     "#;
 
-    pub const INSERT_LAMBDAS_NAMES: &str = r#"
+    pub const INSERT_LAMBDA_NAME: &str = r#"
         INSERT INTO "__pg_lambda"."lambdas" ("name")
-        SELECT UNNEST($1)
+        VALUES ($1)
     "#;
 }
 
@@ -95,7 +96,7 @@ impl<'a> Migrations<'a> {
 
         // Check if private schema is already there.
         let initialized = tr
-            .query::<Single<Boolean>, bool>(queries::SCHEMA_EXISTS, NoParams)
+            .query::<Single<Boolean>, bool>(queries::SELECT_EXISTS_SCHEMA, NoParams)
             .await?;
 
         // Create "__pg_lambda" schema if it does not exist alreay.
@@ -155,6 +156,9 @@ impl<'a> Migrations<'a> {
                     .query::<SetOf<Text>, Vec<&str>>(queries::DELETE_ALL_LAMBDAS_NAMES, NoParams)
                     .await?;
 
+                // Sanity check for lambdas names.
+                names.iter().copied().try_for_each(sanitize_ident)?;
+
                 if let Some((last, head)) = names.split_last() {
                     // Prepare drop statement.
                     statement.push_str("DROP FUNCTION ");
@@ -169,17 +173,12 @@ impl<'a> Migrations<'a> {
                 }
             }
 
-            let mut names = Vec::new();
-
-            // Create all lambdas.
+            // Create all lambdas and insert their names into the lambdas table.
             for def in inventory::iter::<PgLambdaDef>() {
                 tr.query::<Void, ()>(def.create_statement, NoParams).await?;
-                names.push(def.name);
+                tr.query::<Void, ()>(queries::INSERT_LAMBDA_NAME, query_params!(Text(&def.name)))
+                    .await?;
             }
-
-            // Insert them into the table.
-            tr.query::<Void, ()>(queries::INSERT_LAMBDAS_NAMES, NoParams)
-                .await?;
         }
 
         // Commit changes.

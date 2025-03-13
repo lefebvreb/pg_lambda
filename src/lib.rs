@@ -14,5 +14,4 @@ pub mod prelude {
 }
 
 #[doc(hidden)]
-#[path = "macro_util.rs"]
 pub mod __proc_macro_util;
