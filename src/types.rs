@@ -1,4 +1,5 @@
 use std::io::{Error, ErrorKind, Result, Write};
+use std::marker::PhantomData;
 use std::str;
 
 use serde::{Deserialize, Serialize};
@@ -6,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::util::{read_i32, read_u8, write_i32};
 
 pub trait PgType {
+    const NULLABLE: bool = false;
     const SQL_NAME: &str;
 }
 
@@ -117,8 +119,31 @@ impl<'a, T: Deserialize<'a> + 'a> FromPgValue<'a, Jsonb> for T {
     }
 }
 
-// pub struct Nullable<T: PgType>(PhantomData<T>);
+pub struct Nullable<T: PgType>(PhantomData<T>);
 
-// impl<T: PgType> PgType for Nullable<T> {
-//     const SQL_NAME: &str = "???";
-// }
+impl<T: PgType> PgType for Nullable<T> {
+    const NULLABLE: bool = true;
+    const SQL_NAME: &str = T::SQL_NAME;
+}
+
+impl<T: PgType, U: ToPgValue<T>> ToPgValue<Nullable<T>> for Option<U> {
+    fn is_null(&self) -> bool {
+        self.is_none()
+    }
+
+    fn write(&self, dst: &mut Vec<u8>) -> Result<()> {
+        self.as_ref()
+            .ok_or_else(|| Error::new(ErrorKind::InvalidInput, "expected a non-null value"))?
+            .write(dst)
+    }
+}
+
+impl<'a, T: PgType, U: FromPgValue<'a, T>> FromPgValue<'a, Nullable<T>> for Option<U> {
+    fn null() -> Result<Self> {
+        Ok(None)
+    }
+
+    fn read(src: &'a [u8]) -> Result<Self> {
+        U::read(src).map(Some)
+    }
+}
